@@ -1,13 +1,7 @@
-/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _CAM_MEM_MGR_H_
@@ -15,10 +9,12 @@
 
 #include <linux/mutex.h>
 #include <linux/dma-buf.h>
+#if IS_REACHABLE(CONFIG_DMABUF_HEAPS)
+#include <linux/dma-heap.h>
+#endif
 #include <media/cam_req_mgr.h>
 #include "cam_mem_mgr_api.h"
-
-#define CAM_MEM_BUFQ_MAX 1024
+#include <linux/hashtable.h>
 
 /* Enum for possible mem mgr states */
 enum cam_mem_mgr_state {
@@ -32,37 +28,82 @@ enum cam_smmu_mapping_client {
 	CAM_SMMU_MAPPING_KERNEL,
 };
 
+#ifdef CONFIG_CAM_PRESIL
+struct cam_presil_dmabuf_params {
+	int32_t fd_for_umd_daemon;
+	uint32_t refcount;
+};
+#endif
+
 /**
  * struct cam_mem_buf_queue
  *
- * @dma_buf:     pointer to the allocated dma_buf in the table
- * @q_lock:      mutex lock for buffer
- * @hdls:        list of mapped handles
- * @num_hdl:     number of handles
- * @fd:          file descriptor of buffer
- * @buf_handle:  unique handle for buffer
- * @align:       alignment for allocation
- * @len:         size of buffer
- * @flags:       attributes of buffer
- * @vaddr:       IOVA of buffer
- * @kmdvaddr:    Kernel virtual address
- * @active:      state of the buffer
- * @is_imported: Flag indicating if buffer is imported from an FD in user space
+ * @dma_buf:        pointer to the allocated dma_buf in the table
+ * @q_lock:         mutex lock for buffer
+ * @hdls:           list of mapped handles
+ * @num_hdl:        number of handles
+ * @fd:             file descriptor of buffer
+ * @i_ino:          inode number of this dmabuf. Uniquely identifies a buffer
+ * @buf_handle:     unique handle for buffer
+ * @align:          alignment for allocation
+ * @len:            size of buffer
+ * @flags:          attributes of buffer
+ * @vaddr:          IOVA of buffer
+ * @kmdvaddr:       Kernel virtual address
+ * @active:         state of the buffer
+ * @is_imported:    Flag indicating if buffer is imported from an FD in user space
+ * @is_internal:    Flag indicating kernel allocated buffer
+ * @timestamp:      Timestamp at which this entry in tbl was made
+ * @krefcount:      Reference counter to track whether the buffer is
+ *                  mapped and in use by kmd
+ * @smmu_mapping_client: Client buffer (User or kernel)
+ * @presil_params:  Parameters specific to presil environment
+ * @hlist:          Hash node
+ * @bufq_idx:       Existing buf table index
+ * @urefcount:      Reference counter to track whether the buffer is
+ *                  mapped and in use by umd
+ * @idx_lock:           spinlock for buffer
  */
 struct cam_mem_buf_queue {
 	struct dma_buf *dma_buf;
 	struct mutex q_lock;
 	int32_t hdls[CAM_MEM_MMU_MAX_HANDLE];
+	dma_addr_t iova[CAM_MEM_MMU_MAX_HANDLE];
 	int32_t num_hdl;
 	int32_t fd;
+	unsigned long i_ino;
 	int32_t buf_handle;
 	int32_t align;
 	size_t len;
 	uint32_t flags;
-	uint64_t vaddr;
 	uintptr_t kmdvaddr;
 	bool active;
 	bool is_imported;
+	bool is_internal;
+	bool is_nsp_buf;
+	struct timespec64 timestamp;
+	struct kref krefcount;
+	enum cam_smmu_mapping_client smmu_mapping_client;
+
+#ifdef CONFIG_CAM_PRESIL
+	struct cam_presil_dmabuf_params presil_params;
+#endif
+	struct hlist_node hlist;
+	int bufq_idx;
+	struct kref urefcount;
+	spinlock_t idx_lock;
+};
+
+/**
+ * struct cam_mem_existing_buf_table
+ *
+ * @eb_mutex:       mutex lock for existing buf table
+ * @eb_map:         hash table list
+ * @privs:          existing buf table privs
+ */
+struct cam_mem_existing_buf_table {
+	struct mutex eb_mutex;
+	DECLARE_HASHTABLE(eb_map, 10);
 };
 
 /**
@@ -72,12 +113,57 @@ struct cam_mem_buf_queue {
  * @bitmap: bitmap of the mem mgr utility
  * @bits: max bits of the utility
  * @bufq: array of buffers
+ * @dentry: Debugfs entry
+ * @alloc_profile_enable: Whether to enable alloc profiling
+ * @dbg_buf_idx: debug buffer index to get usecases info
+ * @force_cache_allocs: Force all internal buffer allocations with cache
+ * @need_shared_buffer_padding: Whether padding is needed for shared buffer
+ *                              allocations.
+ * @csf_version: Camera security framework version
+ * @system_heap: Handle to system heap
+ * @system_uncached_heap: Handle to system uncached heap
+ * @camera_heap: Handle to camera heap
+ * @camera_uncached_heap: Handle to camera uncached heap
+ * @secure_display_heap: Handle to secure display heap
  */
 struct cam_mem_table {
 	struct mutex m_lock;
 	void *bitmap;
 	size_t bits;
 	struct cam_mem_buf_queue bufq[CAM_MEM_BUFQ_MAX];
+	struct dentry *dentry;
+	bool alloc_profile_enable;
+	size_t dbg_buf_idx;
+	bool force_cache_allocs;
+	bool need_shared_buffer_padding;
+	struct cam_csf_version csf_version;
+#if IS_REACHABLE(CONFIG_DMABUF_HEAPS)
+	struct dma_heap *system_heap;
+	struct dma_heap *system_uncached_heap;
+	struct dma_heap *camera_heap;
+	struct dma_heap *camera_uncached_heap;
+	struct dma_heap *secure_display_heap;
+#endif
+	struct cam_mem_existing_buf_table eb_tbl;
+};
+
+/**
+ * struct cam_mem_table_mini_dump
+ *
+ * @bufq: array of buffers
+ * @dbg_buf_idx: debug buffer index to get usecases info
+ * @alloc_profile_enable: Whether to enable alloc profiling
+ * @dbg_buf_idx: debug buffer index to get usecases info
+ * @force_cache_allocs: Force all internal buffer allocations with cache
+ * @need_shared_buffer_padding: Whether padding is needed for shared buffer
+ *                              allocations.
+ */
+struct cam_mem_table_mini_dump {
+	struct cam_mem_buf_queue bufq[CAM_MEM_BUFQ_MAX];
+	size_t dbg_buf_idx;
+	bool   alloc_profile_enable;
+	bool   force_cache_allocs;
+	bool   need_shared_buffer_padding;
 };
 
 /**
@@ -97,6 +183,13 @@ int cam_mem_mgr_alloc_and_map(struct cam_mem_mgr_alloc_cmd *cmd);
  * @return Status of operation. Negative in case of error. Zero otherwise.
  */
 int cam_mem_mgr_release(struct cam_mem_mgr_release_cmd *cmd);
+
+/**
+ * @brief: Releases all nsp buffer reference
+ *
+ * @return Status of operation. Negative in case of error. Zero otherwise.
+ */
+int cam_mem_mgr_release_nsp_buf(void);
 
 /**
  * @brief Maps a buffer
@@ -130,4 +223,27 @@ int cam_mem_mgr_init(void);
  */
 void cam_mem_mgr_deinit(void);
 
+/**
+ * @brief: Copy buffer content to presil mem for all buffers of
+ *       iommu handle
+ *
+ * @return Status of operation. Negative in case of error. Zero otherwise.
+ */
+int cam_mem_mgr_send_all_buffers_to_presil(int32_t iommu_hdl);
+
+/**
+ * @brief: Copy buffer content of single buffer to presil
+ *
+ * @return Status of operation. Negative in case of error. Zero otherwise.
+ */
+int cam_mem_mgr_send_buffer_to_presil(int32_t iommu_hdl, int32_t buf_handle);
+
+/**
+ * @brief: Copy back buffer content of single buffer from
+ *       presil
+ *
+ * @return Status of operation. Negative in case of error. Zero otherwise.
+ */
+int cam_mem_mgr_retrieve_buffer_from_presil(int32_t buf_handle,
+	uint32_t buf_size, uint32_t offset, int32_t iommu_hdl);
 #endif /* _CAM_MEM_MGR_H_ */

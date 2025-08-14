@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022, 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/timer.h>
@@ -34,26 +28,37 @@ static int  cam_lrme_dump_regs_to_buf(
 	struct cam_hw_info *lrme_hw,
 	struct cam_lrme_hw_dump_args *dump_args)
 {
-	struct cam_hw_soc_info *soc_info = &lrme_hw->soc_info;
-	int i;
-	char *dst;
-	uint32_t *addr, *start;
-	uint32_t num_reg, min_len, remain_len;
+	int                             i;
+	uint8_t                        *dst;
+	uint32_t                       *addr, *start;
+	uint32_t                        num_reg, min_len;
+	size_t                          remain_len;
+	struct cam_hw_soc_info         *soc_info;
 	struct cam_lrme_hw_dump_header *hdr;
 
-	soc_info = &lrme_hw->soc_info;
-	remain_len = dump_args->buf_len - dump_args->offset;
-	min_len =  2 * (sizeof(struct cam_lrme_hw_dump_header) +
-		    CAM_LRME_HW_DUMP_TAG_MAX_LEN) +
-		    soc_info->reg_map[0].size;
-	if (remain_len < min_len) {
-		CAM_ERR(CAM_LRME, "dump buffer exhaust %d %d",
-			remain_len, min_len);
-		return 0;
+	if (!lrme_hw || !req || !dump_args) {
+		CAM_ERR(CAM_LRME, "Invalid params %pK, %pK, %pK",
+			lrme_hw, req, dump_args);
+		return -EINVAL;
 	}
-	dst = (char *)dump_args->cpu_addr + dump_args->offset;
+	soc_info = &lrme_hw->soc_info;
+	if (dump_args->buf_len <= dump_args->offset) {
+		CAM_WARN(CAM_LRME, "dump buffer overshoot len %zu offset %zu",
+			dump_args->buf_len, dump_args->offset);
+		return -ENOSPC;
+	}
+	remain_len = dump_args->buf_len - dump_args->offset;
+	min_len =  sizeof(struct cam_lrme_hw_dump_header) +
+		    soc_info->reg_map[0].size + sizeof(uint32_t);
+
+	if (remain_len < min_len) {
+		CAM_WARN(CAM_LRME, "dump buffer exhaust remain %zu min %u",
+			remain_len, min_len);
+		return -ENOSPC;
+	}
+	dst = (uint8_t *)dump_args->cpu_addr + dump_args->offset;
 	hdr = (struct cam_lrme_hw_dump_header *)dst;
-	snprintf(hdr->tag, CAM_LRME_HW_DUMP_TAG_MAX_LEN,
+	scnprintf(hdr->tag, CAM_LRME_HW_DUMP_TAG_MAX_LEN,
 		"LRME_REG:");
 	hdr->word_size = sizeof(uint32_t);
 	addr = (uint32_t *)(dst + sizeof(struct cam_lrme_hw_dump_header));
@@ -67,21 +72,24 @@ static int  cam_lrme_dump_regs_to_buf(
 	hdr->size = hdr->word_size * (addr - start);
 	dump_args->offset += hdr->size +
 		sizeof(struct cam_lrme_hw_dump_header);
-	CAM_DBG(CAM_LRME, "offset %d", dump_args->offset);
+	CAM_DBG(CAM_LRME, "offset %zu", dump_args->offset);
 	return 0;
 }
 
-static int cam_lrme_hw_dump(struct cam_hw_info *lrme_hw,
+static int cam_lrme_hw_dump(
+	struct cam_hw_info           *lrme_hw,
 	struct cam_lrme_hw_dump_args *dump_args)
 {
-	struct cam_lrme_core *lrme_core =
-		(struct cam_lrme_core *)lrme_hw->core_info;
-	struct cam_lrme_frame_request *req = NULL;
-	struct timeval cur_time;
-	uint64_t diff = 0;
-	char *dst;
-	uint64_t *addr, *start;
-	uint32_t min_len, remain_len;
+	uint8_t                        *dst;
+	ktime_t                         cur_time;
+	size_t                          remain_len;
+	uint32_t                        min_len;
+	uint64_t                        diff;
+	uint64_t                       *addr, *start;
+	struct timespec64               cur_ts;
+	struct timespec64               req_ts;
+	struct cam_lrme_core           *lrme_core;
+	struct cam_lrme_frame_request  *req = NULL;
 	struct cam_lrme_hw_dump_header *hdr;
 
 	mutex_lock(&lrme_hw->hw_mutex);
@@ -90,58 +98,76 @@ static int cam_lrme_hw_dump(struct cam_hw_info *lrme_hw,
 		mutex_unlock(&lrme_hw->hw_mutex);
 		return 0;
 	}
+
+	lrme_core = (struct cam_lrme_core *)lrme_hw->core_info;
+
 	if (lrme_core->req_submit &&
 		lrme_core->req_submit->req_id == dump_args->request_id)
 		req = lrme_core->req_submit;
 	else if (lrme_core->req_proc &&
 		lrme_core->req_proc->req_id == dump_args->request_id)
 		req = lrme_core->req_proc;
+
 	if (!req) {
 		CAM_DBG(CAM_LRME, "LRME req %lld not with hw",
 			dump_args->request_id);
 		mutex_unlock(&lrme_hw->hw_mutex);
 		return 0;
 	}
-	cam_common_util_get_curr_timestamp(&cur_time);
-	diff = cam_common_util_get_time_diff(&cur_time,
-		&req->submit_timestamp);
+
+	cur_time = ktime_get();
+	diff = ktime_us_delta(req->submit_timestamp, cur_time);
+	cur_ts = ktime_to_timespec64(cur_time);
+	req_ts = ktime_to_timespec64(req->submit_timestamp);
+
 	if (diff < CAM_LRME_RESPONSE_TIME_THRESHOLD) {
 		CAM_INFO(CAM_LRME, "No error req %lld %ld:%06ld %ld:%06ld",
 			dump_args->request_id,
-			req->submit_timestamp.tv_sec,
-			req->submit_timestamp.tv_usec,
-			cur_time.tv_sec,
-			cur_time.tv_usec);
+			req_ts.tv_sec,
+			req_ts.tv_nsec/NSEC_PER_USEC,
+			cur_ts.tv_sec,
+			cur_ts.tv_nsec/NSEC_PER_USEC);
 		mutex_unlock(&lrme_hw->hw_mutex);
 		return 0;
 	}
+
 	CAM_INFO(CAM_LRME, "Error req %lld %ld:%06ld %ld:%06ld",
 		dump_args->request_id,
-		req->submit_timestamp.tv_sec,
-		req->submit_timestamp.tv_usec,
-		cur_time.tv_sec,
-		cur_time.tv_usec);
+		req_ts.tv_sec,
+		req_ts.tv_nsec/NSEC_PER_USEC,
+		cur_ts.tv_sec,
+		cur_ts.tv_nsec/NSEC_PER_USEC);
+
+	if (dump_args->buf_len <= dump_args->offset) {
+		CAM_WARN(CAM_LRME, "dump buffer overshoot len %zu offset %zu",
+			dump_args->buf_len, dump_args->offset);
+		mutex_unlock(&lrme_hw->hw_mutex);
+		return 0;
+	}
+
 	remain_len = dump_args->buf_len - dump_args->offset;
-	min_len =  2 * (sizeof(struct cam_lrme_hw_dump_header) +
-		    CAM_LRME_HW_DUMP_TAG_MAX_LEN);
+	min_len =  sizeof(struct cam_lrme_hw_dump_header) +
+		    (CAM_LRME_HW_DUMP_NUM_WORDS * sizeof(uint64_t));
+
 	if (remain_len < min_len) {
-		CAM_ERR(CAM_LRME, "dump buffer exhaust %d %d",
+		CAM_WARN(CAM_LRME, "dump buffer exhaust remain %zu min %u",
 			remain_len, min_len);
 		mutex_unlock(&lrme_hw->hw_mutex);
 		return 0;
 	}
-	dst = (char *)dump_args->cpu_addr + dump_args->offset;
+
+	dst = (uint8_t *)dump_args->cpu_addr + dump_args->offset;
 	hdr = (struct cam_lrme_hw_dump_header *)dst;
-	snprintf(hdr->tag, CAM_LRME_HW_DUMP_TAG_MAX_LEN,
+	scnprintf(hdr->tag, CAM_LRME_HW_DUMP_TAG_MAX_LEN,
 		"LRME_REQ:");
 	hdr->word_size = sizeof(uint64_t);
 	addr = (uint64_t *)(dst + sizeof(struct cam_lrme_hw_dump_header));
 	start = addr;
 	*addr++ = req->req_id;
-	*addr++ = req->submit_timestamp.tv_sec;
-	*addr++ = req->submit_timestamp.tv_usec;
-	*addr++ = cur_time.tv_sec;
-	*addr++ = cur_time.tv_usec;
+	*addr++ = req_ts.tv_sec;
+	*addr++ = req_ts.tv_nsec/NSEC_PER_USEC;
+	*addr++ = cur_ts.tv_sec;
+	*addr++ = cur_ts.tv_nsec/NSEC_PER_USEC;
 	hdr->size = hdr->word_size * (addr - start);
 	dump_args->offset += hdr->size +
 		sizeof(struct cam_lrme_hw_dump_header);
@@ -271,6 +297,7 @@ static int cam_lrme_hw_util_process_config_hw(struct cam_hw_info *lrme_hw,
 	struct cam_lrme_hw_info *hw_info =
 		((struct cam_lrme_core *)lrme_hw->core_info)->hw_info;
 	uint32_t num_cmd = 0;
+	uint32_t num_regval_pairs = 0;
 	uint32_t size;
 	uint32_t mem_base, available_size = config_args->size;
 	uint32_t output_res_mask = 0, input_res_mask = 0;
@@ -384,22 +411,28 @@ static int cam_lrme_hw_util_process_config_hw(struct cam_hw_info *lrme_hw,
 	cmd_buf_addr += size;
 	available_size -= (size * 4);
 
-	size = hw_cdm_info->cdm_ops->cdm_required_size_reg_random(
-		num_cmd / 2);
+	num_regval_pairs = num_cmd / 2;
 
-	if ((size * 4) > available_size) {
-		CAM_ERR(CAM_LRME, "buf size:%d is not sufficient, expected: %d",
-			available_size, size);
-		return -ENOMEM;
+	if (num_regval_pairs) {
+		size = hw_cdm_info->cdm_ops->cdm_required_size_reg_random(
+			num_regval_pairs);
+
+		if ((size * 4) > available_size) {
+			CAM_ERR(CAM_LRME, "buf size:%d is not sufficient, expected: %d",
+				available_size, size);
+			return -ENOMEM;
+		}
+
+		hw_cdm_info->cdm_ops->cdm_write_regrandom(cmd_buf_addr,
+			num_regval_pairs, reg_val_pair);
+		cmd_buf_addr += size;
+		available_size -= (size * 4);
+
+	} else {
+		CAM_DBG(CAM_LRME, "No reg val pairs");
 	}
 
-	hw_cdm_info->cdm_ops->cdm_write_regrandom(cmd_buf_addr, num_cmd / 2,
-		reg_val_pair);
-	cmd_buf_addr += size;
-	available_size -= (size * 4);
-
-	config_args->config_buf_size =
-		config_args->size - available_size;
+	config_args->config_buf_size = config_args->size - available_size;
 
 	return 0;
 }
@@ -436,7 +469,7 @@ static int cam_lrme_hw_util_reset(struct cam_hw_info *lrme_hw,
 		reinit_completion(&lrme_core->reset_complete);
 		cam_io_w_mb(0x1, soc_info->reg_map[0].mem_base +
 			hw_info->titan_reg.top_rst_cmd);
-		time_left = wait_for_completion_timeout(
+		time_left = cam_common_wait_for_completion_timeout(
 			&lrme_core->reset_complete,
 			msecs_to_jiffies(CAM_LRME_HW_RESET_TIMEOUT));
 		if (time_left <= 0) {
@@ -454,7 +487,7 @@ static int cam_lrme_hw_util_reset(struct cam_hw_info *lrme_hw,
 		reinit_completion(&lrme_core->reset_complete);
 		cam_io_w_mb(0x2, soc_info->reg_map[0].mem_base +
 			hw_info->titan_reg.top_rst_cmd);
-		time_left = wait_for_completion_timeout(
+		time_left = cam_common_wait_for_completion_timeout(
 			&lrme_core->reset_complete,
 			msecs_to_jiffies(CAM_LRME_HW_RESET_TIMEOUT));
 		if (time_left <= 0) {
@@ -545,12 +578,15 @@ static int cam_lrme_hw_util_submit_req(struct cam_lrme_core *lrme_core,
 		cdm_cmd->flag = false;
 		cdm_cmd->userdata = NULL;
 		cdm_cmd->cookie = 0;
+		cdm_cmd->gen_irq_arb = false;
+		cdm_cmd->irq_cb_intr_ctx = false;
 
 		for (i = 0; i <= frame_req->num_hw_update_entries; i++) {
 			cmd = (frame_req->hw_update_entries + i);
 			cdm_cmd->cmd[i].bl_addr.mem_handle = cmd->handle;
 			cdm_cmd->cmd[i].offset = cmd->offset;
 			cdm_cmd->cmd[i].len = cmd->len;
+			cdm_cmd->cmd[i].arbitrate = false;
 		}
 
 		rc = cam_cdm_submit_bls(hw_cdm_info->cdm_handle, cdm_cmd);
@@ -1077,8 +1113,7 @@ int cam_lrme_hw_submit_req(void *hw_priv, void *hw_submit_args,
 
 	if (lrme_core->req_submit != NULL) {
 		CAM_ERR(CAM_LRME, "req_submit is not NULL");
-		rc = -EBUSY;
-		goto error;
+		return -EBUSY;
 	}
 
 	rc = cam_lrme_hw_util_submit_req(lrme_core, frame_req);
@@ -1086,7 +1121,9 @@ int cam_lrme_hw_submit_req(void *hw_priv, void *hw_submit_args,
 		CAM_ERR(CAM_LRME, "Submit req failed");
 		goto error;
 	}
-	cam_common_util_get_curr_timestamp(&frame_req->submit_timestamp);
+
+	frame_req->submit_timestamp = ktime_get();
+
 	switch (lrme_core->state) {
 	case CAM_LRME_CORE_STATE_PROCESSING:
 		lrme_core->state = CAM_LRME_CORE_STATE_REQ_PROC_PEND;
@@ -1264,7 +1301,7 @@ irqreturn_t cam_lrme_hw_irq(int irq_num, void *data)
 	struct cam_lrme_core *lrme_core;
 	struct cam_hw_soc_info *soc_info;
 	struct cam_lrme_hw_info   *hw_info;
-	struct crm_workq_task *task;
+	struct crm_worker_task *task;
 	struct cam_lrme_hw_work_data *work_data;
 	uint32_t top_irq_status, fe_irq_status, we_irq_status0, we_irq_status1;
 	int rc;
@@ -1329,9 +1366,9 @@ irqreturn_t cam_lrme_hw_irq(int irq_num, void *data)
 
 	if (top_irq_status || fe_irq_status ||
 		we_irq_status0 || we_irq_status1) {
-		task = cam_req_mgr_workq_get_task(lrme_core->work);
-		if (!task) {
-			CAM_ERR(CAM_LRME, "no empty task available");
+		task = cam_req_mgr_worker_get_task(lrme_core->work);
+		if (IS_ERR_OR_NULL(task)) {
+			CAM_ERR(CAM_LRME, "no empty task = %d available", PTR_ERR(task));
 			return IRQ_NONE;
 		}
 		work_data = (struct cam_lrme_hw_work_data *)task->payload;
@@ -1340,7 +1377,7 @@ irqreturn_t cam_lrme_hw_irq(int irq_num, void *data)
 		work_data->we_irq_status[0] = we_irq_status0;
 		work_data->we_irq_status[1] = we_irq_status1;
 		task->process_cb = cam_lrme_hw_process_irq;
-		rc = cam_req_mgr_workq_enqueue_task(task, data,
+		rc = cam_req_mgr_worker_enqueue_task(task, data,
 			CRM_TASK_PRIORITY_0);
 		if (rc)
 			CAM_ERR(CAM_LRME,

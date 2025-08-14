@@ -1,19 +1,14 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022, 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _CAM_IRQ_CONTROLLER_H_
 #define _CAM_IRQ_CONTROLLER_H_
 
 #include <linux/interrupt.h>
+#include "cam_req_mgr_worker_wrapper.h"
 
 #define CAM_IRQ_BITS_PER_REGISTER      32
 
@@ -34,6 +29,18 @@ enum cam_irq_priority_level {
 	CAM_IRQ_PRIORITY_4,
 	CAM_IRQ_PRIORITY_MAX,
 };
+
+/**
+ * enum cam_irq_event_group:
+ * @brief: Event groups to filter out events while handling. Use group 0 as default.
+ */
+enum cam_irq_event_group {
+	CAM_IRQ_EVT_GROUP_0,
+	CAM_IRQ_EVT_GROUP_1,
+	CAM_IRQ_EVT_GROUP_2,
+};
+
+#define CAM_IRQ_MAX_DEPENDENTS 2
 
 /*
  * struct cam_irq_register_set:
@@ -62,12 +69,15 @@ struct cam_irq_register_set {
  *                          to take effect
  * @global_clear_bitmask:   Bitmask needed to be used in Global Clear register
  *                          for Clear IRQ cmd to take effect
+ * @clear_all_bitmask:      Bitmask that specifies which bits should be written
+ *                          to clear register when it is to be cleared forcefully
  */
 struct cam_irq_controller_reg_info {
 	uint32_t                      num_registers;
 	struct cam_irq_register_set  *irq_reg_set;
 	uint32_t                      global_clear_offset;
 	uint32_t                      global_clear_bitmask;
+	uint32_t                      clear_all_bitmask;
 };
 
 /*
@@ -111,20 +121,15 @@ typedef int (*CAM_IRQ_HANDLER_TOP_HALF)(uint32_t evt_id,
 typedef int (*CAM_IRQ_HANDLER_BOTTOM_HALF)(void *handler_priv,
 	void *evt_payload_priv);
 
-typedef void (*CAM_IRQ_BOTTOM_HALF_ENQUEUE_FUNC)(void *bottom_half,
-	void *bh_cmd, void *handler_priv, void *evt_payload_priv,
-	CAM_IRQ_HANDLER_BOTTOM_HALF);
+typedef int (*CAM_IRQ_BOTTOM_HALF_ENQUEUE_FUNC)(struct crm_worker_task *bh_cmd,
+	void *handler_priv, int32_t prio);
 
-typedef int (*CAM_IRQ_GET_TASKLET_PAYLOAD_FUNC)(void *bottom_half,
-	void **bh_cmd);
-
-typedef void (*CAM_IRQ_PUT_TASKLET_PAYLOAD_FUNC)(void *bottom_half,
-	void **bh_cmd);
+typedef struct crm_worker_task * (*CAM_IRQ_GET_WORKER_PAYLOAD_FUNC)(
+	struct cam_req_mgr_core_worker *bottom_half);
 
 struct cam_irq_bh_api {
 	CAM_IRQ_BOTTOM_HALF_ENQUEUE_FUNC bottom_half_enqueue_func;
-	CAM_IRQ_GET_TASKLET_PAYLOAD_FUNC get_bh_payload_func;
-	CAM_IRQ_PUT_TASKLET_PAYLOAD_FUNC put_bh_payload_func;
+	CAM_IRQ_GET_WORKER_PAYLOAD_FUNC get_bh_payload_func;
 };
 
 /*
@@ -165,6 +170,7 @@ int cam_irq_controller_init(const char       *name,
  *                       enqueue the event for further handling
  * @bottom_half_enqueue_func:
  *                       Function used to enqueue the bottom_half event
+ * @evt_grp:             Event group to which this event must belong to (use group 0 as default)
  *
  * @return:              Positive: Success. Value represents handle which is
  *                                 to be used to unsubscribe
@@ -177,7 +183,8 @@ int cam_irq_controller_subscribe_irq(void *irq_controller,
 	CAM_IRQ_HANDLER_TOP_HALF           top_half_handler,
 	CAM_IRQ_HANDLER_BOTTOM_HALF        bottom_half_handler,
 	void                              *bottom_half,
-	struct cam_irq_bh_api             *irq_bh_api);
+	struct cam_irq_bh_api             *irq_bh_api,
+	enum cam_irq_event_group           evt_grp);
 
 /*
  * cam_irq_controller_unsubscribe_irq()
@@ -224,7 +231,7 @@ int cam_irq_controller_deinit(void **irq_controller);
  *
  * @return:             IRQ_HANDLED/IRQ_NONE
  */
-irqreturn_t cam_irq_controller_handle_irq(int irq_num, void *priv);
+irqreturn_t cam_irq_controller_handle_irq(int irq_num, void *priv, int evt_grp);
 
 /*
  * cam_irq_controller_disable_irq()
@@ -263,17 +270,64 @@ int cam_irq_controller_disable_irq(void *irq_controller, uint32_t handle);
 int cam_irq_controller_enable_irq(void *irq_controller, uint32_t handle);
 
 /*
- * cam_irq_controller_clear_and_mask()
+ * cam_irq_controller_disable_all()
  *
  * @brief:              This function clears and masks all the irq bits
  *
- * @irq_num:            Number of IRQ line that was set that lead to this
- *                      function being called
  * @priv:               Private data registered with request_irq is passed back
  *                      here. This private data should be the irq_controller
  *                      structure.
- *
- * @return:             IRQ_HANDLED/IRQ_NONE
  */
-irqreturn_t cam_irq_controller_clear_and_mask(int irq_num, void *priv);
+void cam_irq_controller_disable_all(void *priv);
+
+/*
+ * cam_irq_controller_update_irq()
+ *
+ * @brief:              Enable/Disable the interrupts on given controller.
+ *                      Dynamically any irq can be disabled or enabled.
+ *
+ * @irq_controller:     Pointer to IRQ Controller that controls the registered
+ *                      events to it.
+ * @handle:             Handle returned on successful subscribe, used to
+ *                      identify the handler object
+ *
+ * @enable:             Flag to indicate if disable or enable the irq.
+ *
+ * @irq_mask:           IRQ mask to be enabled or disabled.
+ *
+ * @return:             0: events found and enabled
+ *                      Negative: events not registered on this controller
+ */
+int cam_irq_controller_update_irq(void *irq_controller, uint32_t handle,
+	bool enable, uint32_t *irq_mask);
+
+/**
+ * cam_irq_controller_register_dependent
+ * @brief:                 Register one IRQ controller as dependent for another IRQ controller
+ *
+ * @primary_controller:    Controller whose top half will invoke handle_irq function of secondary
+ *                         controller
+ * @secondary_controller:  Controller whose handle_irq function that will be invoked from primary
+ *                         controller
+ *
+ * @return:                0: successfully registered
+ *                         Negative: failed to register as dependent
+ */
+int cam_irq_controller_register_dependent(void *primary_controller, void *secondary_controller,
+	uint32_t *mask);
+
+/**
+ * cam_irq_controller_register_dependent
+ * @brief:                 Unregister previously registered dependent IRQ controller
+ *
+ * @primary_controller:    Controller whose top half will invoke handle_irq function of secondary
+ *                         controller
+ * @secondary_controller:  Controller whose handle_irq function that will be invoked from primary
+ *                         controller
+ *
+ * @return:                0: successfully unregistered
+ *                         Negative: failed to unregister dependent
+ */
+int cam_irq_controller_unregister_dependent(void *primary_controller, void *secondary_controller);
+
 #endif /* _CAM_IRQ_CONTROLLER_H_ */

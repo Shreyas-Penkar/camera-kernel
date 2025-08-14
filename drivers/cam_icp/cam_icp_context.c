@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/debugfs.h>
@@ -17,7 +11,6 @@
 #include <media/cam_sync.h>
 #include <media/cam_defs.h>
 #include <media/cam_icp.h>
-#include "cam_sync_api.h"
 #include "cam_node.h"
 #include "cam_context.h"
 #include "cam_context_utils.h"
@@ -27,28 +20,30 @@
 #include "cam_trace.h"
 #include "cam_debug_util.h"
 #include "cam_packet_util.h"
+#include "cam_common_util.h"
 
 static const char icp_dev_name[] = "cam-icp";
 
-static int cam_icp_context_dump_active_request(void *data, unsigned long iova,
-	uint32_t buf_info)
+static int cam_icp_context_dump_active_request(void *data,
+	struct cam_smmu_pf_info *pf_info)
 {
 	struct cam_context *ctx = (struct cam_context *)data;
 	struct cam_ctx_request          *req = NULL;
 	struct cam_ctx_request          *req_temp = NULL;
 	struct cam_hw_mgr_dump_pf_data  *pf_dbg_entry = NULL;
+	uint32_t  resource_type = 0;
 	int rc = 0;
-	bool b_mem_found = false;
+	bool b_mem_found = false, b_ctx_found = false;
 
 	if (!ctx) {
 		CAM_ERR(CAM_ICP, "Invalid ctx");
 		return -EINVAL;
 	}
 
-	if (ctx->state < CAM_CTX_READY || ctx->state > CAM_CTX_ACTIVATED) {
+	if (ctx->state < CAM_CTX_ACQUIRED || ctx->state > CAM_CTX_ACTIVATED) {
 		CAM_ERR(CAM_ICP, "Invalid state icp ctx %d state %d",
 			ctx->ctx_id, ctx->state);
-		return -EINVAL;
+		goto end;
 	}
 
 	CAM_INFO(CAM_ICP, "iommu fault for icp ctx %d state %d",
@@ -59,8 +54,8 @@ static int cam_icp_context_dump_active_request(void *data, unsigned long iova,
 		pf_dbg_entry = &(req->pf_data);
 		CAM_INFO(CAM_ICP, "req_id : %lld", req->request_id);
 
-		rc = cam_context_dump_pf_info_to_hw(ctx, pf_dbg_entry->packet,
-			iova, buf_info, &b_mem_found);
+		rc = cam_context_dump_pf_info_to_hw(ctx, pf_dbg_entry,
+			&b_mem_found, &b_ctx_found, &resource_type, pf_info);
 		if (rc)
 			CAM_ERR(CAM_ICP, "Failed to dump pf info");
 
@@ -68,6 +63,26 @@ static int cam_icp_context_dump_active_request(void *data, unsigned long iova,
 			CAM_ERR(CAM_ICP, "Found page fault in req %lld %d",
 				req->request_id, rc);
 	}
+
+end:
+	return rc;
+}
+
+static int cam_icp_context_mini_dump(void *priv, void *args)
+{
+	int rc;
+	struct cam_context *ctx;
+
+	if (!priv || !args) {
+		CAM_ERR(CAM_ICP, "Invalid priv %pK args %pK", priv, args);
+		return -EINVAL;
+	}
+
+	ctx = (struct cam_context *)priv;
+	rc = cam_context_mini_dump(ctx, args);
+	if (rc)
+		CAM_ERR(CAM_ICP, "ctx [id: %u name: %s] Mini Dump failed rc %d", ctx->dev_name,
+			ctx->ctx_id, rc);
 
 	return rc;
 }
@@ -114,7 +129,8 @@ static int __cam_icp_start_dev_in_acquired(struct cam_context *ctx,
 	return rc;
 }
 
-static int __cam_icp_dump_dev_in_ready(struct cam_context *ctx,
+static int __cam_icp_dump_dev_in_ready(
+	struct cam_context      *ctx,
 	struct cam_dump_req_cmd *cmd)
 {
 	int rc;
@@ -145,6 +161,8 @@ static int __cam_icp_config_dev_in_ready(struct cam_context *ctx,
 	size_t len;
 	uintptr_t packet_addr;
 	struct cam_packet *packet;
+	struct cam_packet *packet_u;
+	size_t remain_len = 0;
 
 	rc = cam_mem_get_cpu_buf((int32_t) cmd->packet_handle,
 		&packet_addr, &len);
@@ -155,14 +173,24 @@ static int __cam_icp_config_dev_in_ready(struct cam_context *ctx,
 		return rc;
 	}
 
+	remain_len = len;
 	if ((len < sizeof(struct cam_packet)) ||
 		(cmd->offset >= (len - sizeof(struct cam_packet)))) {
-		CAM_ERR(CAM_CTXT, "Not enough buf");
-		return -EINVAL;
+		CAM_ERR(CAM_CTXT,
+			"Invalid offset, len: %zu cmd offset: %llu sizeof packet: %zu",
+			len, cmd->offset, sizeof(struct cam_packet));
+		rc = -EINVAL;
+		goto put_cpu_buf;
 	}
 
-	packet = (struct cam_packet *) ((uint8_t *)packet_addr +
+	remain_len -= (size_t)cmd->offset;
+	packet_u = (struct cam_packet *) ((uint8_t *)packet_addr +
 		(uint32_t)cmd->offset);
+	rc = cam_packet_util_copy_pkt_to_kmd(packet_u, &packet, remain_len);
+	if (rc) {
+		CAM_ERR(CAM_ICP, "copying packet to kmd failed");
+		goto put_cpu_buf;
+	}
 
 	if (((packet->header.op_code & 0xff) ==
 		CAM_ICP_OPCODE_IPE_SETTINGS) ||
@@ -175,6 +203,9 @@ static int __cam_icp_config_dev_in_ready(struct cam_context *ctx,
 	if (rc)
 		CAM_ERR(CAM_ICP, "Failed to prepare device");
 
+	cam_common_mem_free(packet);
+put_cpu_buf:
+	cam_mem_put_cpu_buf((int32_t) cmd->packet_handle);
 	return rc;
 }
 
@@ -229,6 +260,7 @@ static struct cam_ctx_ops
 		},
 		.crm_ops = {},
 		.irq_ops = NULL,
+		.mini_dump_ops = cam_icp_context_mini_dump,
 	},
 	/* Acquired */
 	{
@@ -242,6 +274,7 @@ static struct cam_ctx_ops
 		.crm_ops = {},
 		.irq_ops = __cam_icp_handle_buf_done_in_ready,
 		.pagefault_ops = cam_icp_context_dump_active_request,
+		.mini_dump_ops = cam_icp_context_mini_dump,
 	},
 	/* Ready */
 	{
@@ -255,6 +288,11 @@ static struct cam_ctx_ops
 		.crm_ops = {},
 		.irq_ops = __cam_icp_handle_buf_done_in_ready,
 		.pagefault_ops = cam_icp_context_dump_active_request,
+		.mini_dump_ops = cam_icp_context_mini_dump,
+	},
+	/* Flushed */
+	{
+		.ioctl_ops = {},
 	},
 	/* Activated */
 	{
@@ -262,11 +300,12 @@ static struct cam_ctx_ops
 		.crm_ops = {},
 		.irq_ops = NULL,
 		.pagefault_ops = cam_icp_context_dump_active_request,
+		.mini_dump_ops = cam_icp_context_mini_dump,
 	},
 };
 
 int cam_icp_context_init(struct cam_icp_context *ctx,
-	struct cam_hw_mgr_intf *hw_intf, uint32_t ctx_id)
+	struct cam_hw_mgr_intf *hw_intf, uint32_t ctx_id, int img_iommu_hdl)
 {
 	int rc;
 
@@ -277,7 +316,7 @@ int cam_icp_context_init(struct cam_icp_context *ctx,
 	}
 
 	rc = cam_context_init(ctx->base, icp_dev_name, CAM_ICP, ctx_id,
-		NULL, hw_intf, ctx->req_base, CAM_CTX_REQ_MAX);
+		NULL, NULL, hw_intf, ctx->req_base, CAM_CTX_ICP_REQ_MAX, img_iommu_hdl);
 	if (rc) {
 		CAM_ERR(CAM_ICP, "Camera Context Base init failed");
 		goto err;
@@ -285,6 +324,9 @@ int cam_icp_context_init(struct cam_icp_context *ctx,
 
 	ctx->base->state_machine = cam_icp_ctx_state_machine;
 	ctx->base->ctx_priv = ctx;
+	ctx->base->max_hw_update_entries = CAM_CTX_CFG_MAX;
+	ctx->base->max_in_map_entries = CAM_CTX_CFG_MAX;
+	ctx->base->max_out_map_entries = CAM_CTX_CFG_MAX;
 	ctx->ctxt_to_hw_map = NULL;
 
 err:
@@ -303,4 +345,3 @@ int cam_icp_context_deinit(struct cam_icp_context *ctx)
 
 	return 0;
 }
-

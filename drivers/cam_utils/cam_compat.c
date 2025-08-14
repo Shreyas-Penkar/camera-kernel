@@ -1,16 +1,70 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/dma-mapping.h>
 #include <linux/of_address.h>
+#include <linux/slab.h>
+#include <linux/fdtable.h>
+#include <linux/mem-buf.h>
 
 #include "cam_compat.h"
 #include "cam_debug_util.h"
+#include "cam_cpas_api.h"
+#include "camera_main.h"
+#include <media/cam_isp.h>
+#include "cam_eeprom_dev.h"
+#include "cam_eeprom_core.h"
+#include "cam_actuator_dev.h"
+#include "cam_flash_dev.h"
+#include "cam_ois_dev.h"
+#include "cam_sensor_dev.h"
 
+int cam_smmu_fetch_csf_version(struct cam_csf_version *csf_version)
+{
+#ifdef CONFIG_SECURE_CAMERA_25
+	struct csf_version csf_ver;
+	int rc;
 
-#if KERNEL_VERSION(5, 4, 0) <= LINUX_VERSION_CODE
+	/* Fetch CSF version from SMMU proxy driver */
+	rc = smmu_proxy_get_csf_version(&csf_ver);
+	if (rc) {
+		CAM_ERR(CAM_SMMU,
+			"Failed to get CSF version from SMMU proxy: %d", rc);
+		return rc;
+	}
+
+	csf_version->arch_ver = csf_ver.arch_ver;
+	csf_version->max_ver = csf_ver.max_ver;
+	csf_version->min_ver = csf_ver.min_ver;
+#else
+	/* This defaults to the legacy version */
+	csf_version->arch_ver = 2;
+	csf_version->max_ver = 0;
+	csf_version->min_ver = 0;
+#endif
+	return 0;
+}
+
+unsigned long cam_update_dma_map_attributes(unsigned long attrs)
+{
+#ifdef CONFIG_SECURE_CAMERA_25
+	attrs |= DMA_ATTR_QTI_SMMU_PROXY_MAP;
+#endif
+	return attrs;
+}
+
+size_t cam_align_dma_buf_size(size_t len)
+{
+#ifdef CONFIG_SECURE_CAMERA_25
+	len = ALIGN(len, SMMU_PROXY_MEM_ALIGNMENT);
+#endif
+	return len;
+}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)
 int cam_reserve_icp_fw(struct cam_fw_alloc_info *icp_fw, size_t fw_length)
 {
 	int rc = 0;
@@ -38,7 +92,6 @@ int cam_reserve_icp_fw(struct cam_fw_alloc_info *icp_fw, size_t fw_length)
 		rc = -ENOMEM;
 		goto end;
 	}
-
 	memset_io(icp_fw->fw_kva, 0, fw_length);
 
 end:
@@ -50,7 +103,6 @@ void cam_unreserve_icp_fw(struct cam_fw_alloc_info *icp_fw, size_t fw_length)
 	iounmap(icp_fw->fw_kva);
 }
 
-/*
 int cam_ife_notify_safe_lut_scm(bool safe_trigger)
 {
 	const uint32_t smmu_se_ife = 0;
@@ -74,21 +126,260 @@ int cam_ife_notify_safe_lut_scm(bool safe_trigger)
 }
 
 int cam_csiphy_notify_secure_mode(struct csiphy_device *csiphy_dev,
-	bool protect, int32_t offset)
+	bool protect, int32_t offset, bool is_shutdown)
 {
 	int rc = 0;
 
-	if (offset >= CSIPHY_MAX_INSTANCES) {
+#if defined CONFIG_SECURE_CAMERA_V3 || defined CONFIG_TZ_DCP_API_VER_2
+	if (!is_shutdown) {
+		struct smci_object client_env, sc_object;
+		struct tc_driver_sensor_info params = {0};
+
+		if (offset >= csiphy_dev->session_max_device_support) {
+			CAM_ERR(CAM_CSIPHY, "Invalid CSIPHY offset");
+			return -EINVAL;
+		}
+
+		rc = smci_get_client_env_object(&client_env);
+		if (rc) {
+			CAM_ERR(CAM_CSIPHY, "Failed getting mink env object, rc: %d", rc);
+			rc = -EINVAL;
+			return rc;
+		}
+
+		rc = smci_clientenv_open(client_env, CTRUSTEDCAMERADRIVER_UID, &sc_object);
+		if (rc) {
+			CAM_ERR(CAM_CSIPHY, "Failed getting mink sc_object, rc: %d", rc);
+			rc = -EINVAL;
+			return rc;
+		}
+
+		params.phy_lane_sel_mask = csiphy_dev->csiphy_info[offset].csiphy_cpas_cp_reg_mask;
+		params.protect = protect ? 1 : 0;
+
+		CAM_INFO(CAM_UTIL, "phy_sel_m: %lld protect: %d",
+					params.phy_lane_sel_mask,
+					params.protect);
+
+		rc = trusted_camera_driver_dynamic_protect_sensor(sc_object, &params);
+		if (rc) {
+			CAM_ERR(CAM_CSIPHY, "Mink secure call failed, rc: %d", rc);
+			rc = -EINVAL;
+			return rc;
+		}
+
+		rc = smci_object_release(sc_object);
+		if (rc) {
+			CAM_ERR(CAM_CSIPHY, "Failed releasing secure camera object, rc: %d", rc);
+			rc = -EINVAL;
+			return rc;
+		}
+		rc = smci_object_release(client_env);
+		if (rc) {
+			CAM_ERR(CAM_CSIPHY, "Failed releasing mink env object, rc: %d", rc);
+			rc = -EINVAL;
+			return rc;
+		}
+	} else {
+		if (offset >= csiphy_dev->session_max_device_support) {
+			CAM_ERR(CAM_CSIPHY, "Invalid CSIPHY offset");
+			rc = -EINVAL;
+		} else if (qcom_scm_camera_protect_phy_lanes(protect,
+				csiphy_dev->csiphy_info[offset]
+					.csiphy_cpas_cp_reg_mask)) {
+			CAM_ERR(CAM_CSIPHY, "SCM call to hypervisor failed");
+			rc = -EINVAL;
+		}
+		CAM_INFO(CAM_CSIPHY,
+			"Legacy scm call shutdown %d", is_shutdown);
+	}
+#else
+	if (offset >= csiphy_dev->session_max_device_support) {
 		CAM_ERR(CAM_CSIPHY, "Invalid CSIPHY offset");
 		rc = -EINVAL;
 	} else if (qcom_scm_camera_protect_phy_lanes(protect,
-			csiphy_dev->csiphy_cpas_cp_reg_mask[offset])) {
+			csiphy_dev->csiphy_info[offset]
+				.csiphy_cpas_cp_reg_mask)) {
 		CAM_ERR(CAM_CSIPHY, "SCM call to hypervisor failed");
 		rc = -EINVAL;
 	}
+#endif
 
-	return 0;
+	return rc;
 }
+
+#ifdef CONFIG_SECURE_CAMERA_V3
+int cam_isp_notify_secure_unsecure_port(struct port_info *sec_unsec_port_info)
+{
+	int rc = 0;
+	struct smci_object client_env, sc_object;
+
+	rc = smci_get_client_env_object(&client_env);
+	if (rc) {
+		CAM_ERR(CAM_ISP, "Failed getting mink env object, rc: %d", rc);
+		return rc;
+	}
+
+	rc = smci_clientenv_open(client_env, CTRUSTEDCAMERADRIVER_UID, &sc_object);
+	if (rc) {
+		CAM_ERR(CAM_ISP, "Failed getting mink sc_object, rc: %d", rc);
+		goto release_client;
+	}
+
+	rc = trusted_camera_driver_dynamic_configure_ports(sc_object, sec_unsec_port_info, 2);
+	if (rc) {
+		CAM_ERR(CAM_ISP,
+			"trusted_camera_driver_dynamic_configure_ports failed, rc: %d", rc);
+		goto release_sc_object;
+	}
+
+release_sc_object:
+	if (smci_object_release(sc_object)) {
+		if (!rc)
+			rc = -EINVAL;
+		CAM_ERR(CAM_ISP, "Failed releasing secure camera object, rc: %d", rc);
+	}
+
+release_client:
+	if (smci_object_release(client_env)) {
+		if (!rc)
+			rc = -EINVAL;
+		CAM_ERR(CAM_ISP, "Failed releasing mink env object, rc: %d", rc);
+	}
+
+	return rc;
+}
+
+int32_t cam_convert_hw_id_to_secure_hw_type(uint32_t hw_id)
+{
+	uint32_t hw_type = -1;
+
+	switch (hw_id) {
+	case CAM_ISP_IFE0_HW:
+		hw_type = ITRUSTEDCAMERADRIVER_IFE0;
+		break;
+	case CAM_ISP_IFE1_HW:
+		hw_type = ITRUSTEDCAMERADRIVER_IFE1;
+		break;
+	case CAM_ISP_IFE2_HW:
+		hw_type = ITRUSTEDCAMERADRIVER_IFE2;
+		break;
+	case CAM_ISP_IFE0_LITE_HW:
+		hw_type = ITRUSTEDCAMERADRIVER_IFE_LITE_0;
+		break;
+	case CAM_ISP_IFE1_LITE_HW:
+		hw_type = ITRUSTEDCAMERADRIVER_IFE_LITE_1;
+		break;
+	case CAM_ISP_IFE2_LITE_HW:
+		hw_type = ITRUSTEDCAMERADRIVER_IFE_LITE_2;
+		break;
+	case CAM_ISP_IFE3_LITE_HW:
+		hw_type = ITRUSTEDCAMERADRIVER_IFE_LITE_3;
+		break;
+	case CAM_ISP_IFE4_LITE_HW:
+		hw_type = ITRUSTEDCAMERADRIVER_IFE_LITE_4;
+		break;
+	case CAM_ISP_IFE5_LITE_HW:
+		hw_type = ITRUSTEDCAMERADRIVER_IFE_LITE_5;
+		break;
+	case CAM_ISP_IFE6_LITE_HW:
+		hw_type = ITRUSTEDCAMERADRIVER_IFE_LITE_6;
+		break;
+	case CAM_ISP_IFE7_LITE_HW:
+		hw_type = ITRUSTEDCAMERADRIVER_IFE_LITE_7;
+		break;
+	case CAM_ISP_IFE8_LITE_HW:
+		hw_type = ITRUSTEDCAMERADRIVER_IFE_LITE_8;
+		break;
+	case CAM_ISP_IFE9_LITE_HW:
+		hw_type = ITRUSTEDCAMERADRIVER_IFE_LITE_9;
+		break;
+	default:
+		CAM_ERR(CAM_ISP, "Invalid hw_id 0x%x", hw_id);
+		break;
+	}
+	return hw_type;
+}
+#endif
+
+#ifdef CONFIG_TZ_DCP_API_VER_2
+int cam_isp_notify_secure_unsecure_port(struct port_info *sec_unsec_port_info)
+{
+	int rc = 0;
+	struct smci_object client_env, sc_object;
+
+	rc = smci_get_client_env_object(&client_env);
+	if (rc) {
+		CAM_ERR(CAM_ISP, "Failed getting mink env object, rc: %d", rc);
+		return rc;
+	}
+
+	rc = smci_clientenv_open(client_env, CTRUSTEDCAMERADRIVER_UID, &sc_object);
+	if (rc) {
+		CAM_ERR(CAM_ISP, "Failed getting mink sc_object, rc: %d", rc);
+		goto release_client;
+	}
+
+	rc = trusted_camera_driver_dynamic_configure_ports_v2(sc_object, sec_unsec_port_info, 2);
+	if (rc) {
+		CAM_ERR(CAM_ISP,
+			"trusted_camera_driver_dynamic_configure_ports failed, rc: %d", rc);
+		goto release_sc_object;
+	}
+
+release_sc_object:
+	if (smci_object_release(sc_object)) {
+		if (!rc)
+			rc = -EINVAL;
+		CAM_ERR(CAM_ISP, "Failed releasing secure camera object, rc: %d", rc);
+	}
+
+release_client:
+	if (smci_object_release(client_env)) {
+		if (!rc)
+			rc = -EINVAL;
+		CAM_ERR(CAM_ISP, "Failed releasing mink env object, rc: %d", rc);
+	}
+
+	return rc;
+}
+
+int cam_convert_hw_idx_to_ife_hw_type(int hw_idx,
+	uint32_t num_ife, uint32_t num_ife_lite)
+{
+	if (hw_idx < num_ife)
+		return ITRUSTEDCAMERADRIVER_IFE;
+	else if (hw_idx <= num_ife_lite)
+		return ITRUSTEDCAMERADRIVER_IFE_LITE;
+
+	CAM_ERR(CAM_ISP, "hw idx %d out-of-bounds", hw_idx);
+	return -EINVAL;
+}
+
+int32_t cam_convert_hw_id_to_secure_cam_hw_type(uint32_t hw_id)
+{
+	uint32_t hw_type = -1;
+
+	switch (hw_id) {
+	case 0:
+		hw_type = ITRUSTEDCAMERADRIVER_IFE;
+		break;
+	case 1:
+		hw_type = ITRUSTEDCAMERADRIVER_IFE_LITE;
+		break;
+	case 2:
+		hw_type = ITRUSTEDCAMERADRIVER_IPE;
+		break;
+	case 3:
+		hw_type = ITRUSTEDCAMERADRIVER_TFE;
+		break;
+	default:
+		CAM_ERR(CAM_ISP, "Invalid hw_id 0x%x", hw_id);
+		break;
+	}
+	return hw_type;
+}
+#endif
 
 void cam_cpastop_scm_write(struct cam_cpas_hw_errata_wa *errata_wa)
 {
@@ -102,7 +393,12 @@ void cam_cpastop_scm_write(struct cam_cpas_hw_errata_wa *errata_wa)
 static int camera_platform_compare_dev(struct device *dev, const void *data)
 {
 	return platform_bus_type.match(dev, (struct device_driver *) data);
-}*/
+}
+
+static int camera_i2c_compare_dev(struct device *dev, const void *data)
+{
+	return i2c_bus_type.match(dev, (struct device_driver *) data);
+}
 #else
 int cam_reserve_icp_fw(struct cam_fw_alloc_info *icp_fw, size_t fw_length)
 {
@@ -159,10 +455,11 @@ int cam_csiphy_notify_secure_mode(struct csiphy_device *csiphy_dev,
 	struct scm_desc description = {
 		.arginfo = SCM_ARGS(2, SCM_VAL, SCM_VAL),
 		.args[0] = protect,
-		.args[1] = csiphy_dev->csiphy_cpas_cp_reg_mask[offset],
+		.args[1] = csiphy_dev->csiphy_info[offset]
+			.csiphy_cpas_cp_reg_mask,
 	};
 
-	if (offset >= CSIPHY_MAX_INSTANCES) {
+	if (offset >= csiphy_dev->session_max_device_support) {
 		CAM_ERR(CAM_CSIPHY, "Invalid CSIPHY offset");
 		rc = -EINVAL;
 	} else if (scm_call2(SCM_SIP_FNID(0x18, 0x7), &description)) {
@@ -170,7 +467,7 @@ int cam_csiphy_notify_secure_mode(struct csiphy_device *csiphy_dev,
 		rc = -EINVAL;
 	}
 
-	return 0;
+	return rc;
 }
 
 void cam_cpastop_scm_write(struct cam_cpas_hw_errata_wa *errata_wa)
@@ -186,6 +483,510 @@ static int camera_platform_compare_dev(struct device *dev, void *data)
 {
 	return platform_bus_type.match(dev, (struct device_driver *) data);
 }
+
+static int camera_i2c_compare_dev(struct device *dev, void *data)
+{
+	return i2c_bus_type.match(dev, (struct device_driver *) data);
+}
 #endif
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
+void cam_free_clear(const void * ptr)
+{
+	kfree_sensitive(ptr);
+}
+#else
+void cam_free_clear(const void * ptr)
+{
+	kzfree(ptr);
+}
+#endif
 
+#if KERNEL_VERSION(6, 1, 0) <= LINUX_VERSION_CODE
+int cam_update_camnoc_qos_settings(uint32_t use_case_id,
+	uint32_t qos_cnt, struct qcom_scm_camera_qos *scm_buf)
+{
+	int rc = 0;
+
+	rc = qcom_scm_camera_update_camnoc_qos(use_case_id, qos_cnt, scm_buf);
+	if (rc)
+		CAM_ERR(CAM_CPAS, "scm call to update QoS failed: %d, use_case_id: %d",
+			rc, use_case_id);
+
+	return rc;
+}
+#else
+int cam_update_camnoc_qos_settings(uint32_t use_case_id,
+	uint32_t qos_cnt, struct qcom_scm_camera_qos *scm_buf)
+{
+	CAM_ERR(CAM_CPAS, "scm call to update QoS is not supported under this kernel");
+	return -EOPNOTSUPP;
+}
+#endif
+
+/* Callback to compare device from match list before adding as component */
+static inline int camera_component_compare_dev(struct device *dev, void *data)
+{
+	return dev == data;
+}
+
+/* Add component matches to list for master of aggregate driver */
+int camera_component_match_add_drivers(struct device *master_dev,
+	struct component_match **match_list)
+{
+	int i, rc = 0;
+	struct platform_device *pdev = NULL;
+	struct i2c_client *client = NULL;
+	struct device *start_dev = NULL, *match_dev = NULL;
+
+	if (!master_dev || !match_list) {
+		CAM_ERR(CAM_UTIL, "Invalid parameters for component match add");
+		rc = -EINVAL;
+		goto end;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(cam_component_platform_drivers); i++) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)
+		struct device_driver const *drv =
+			&cam_component_platform_drivers[i]->driver;
+		const void *drv_ptr = (const void *)drv;
+#else
+		struct device_driver *drv = &cam_component_platform_drivers[i]->driver;
+		void *drv_ptr = (void *)drv;
+#endif
+		start_dev = NULL;
+		while ((match_dev = bus_find_device(&platform_bus_type,
+			start_dev, drv_ptr, &camera_platform_compare_dev))) {
+			put_device(start_dev);
+			pdev = to_platform_device(match_dev);
+			CAM_DBG(CAM_UTIL, "Adding matched component:%s", pdev->name);
+			component_match_add(master_dev, match_list,
+				camera_component_compare_dev, match_dev);
+			start_dev = match_dev;
+		}
+		put_device(start_dev);
+	}
+
+	for (i = 0; i < ARRAY_SIZE(cam_component_i2c_drivers); i++) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)
+		struct device_driver const *drv =
+			&cam_component_i2c_drivers[i]->driver;
+		const void *drv_ptr = (const void *)drv;
+#else
+		struct device_driver *drv = &cam_component_i2c_drivers[i]->driver;
+		void *drv_ptr = (void *)drv;
+#endif
+		start_dev = NULL;
+		while ((match_dev = bus_find_device(&i2c_bus_type,
+			start_dev, drv_ptr, &camera_i2c_compare_dev))) {
+			put_device(start_dev);
+			client = to_i2c_client(match_dev);
+			CAM_DBG(CAM_UTIL, "Adding matched component:%s", client->name);
+			component_match_add(master_dev, match_list,
+				camera_component_compare_dev, match_dev);
+			start_dev = match_dev;
+		}
+		put_device(start_dev);
+	}
+
+end:
+	return rc;
+}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
+#include <linux/qcom-iommu-util.h>
+void cam_check_iommu_faults(struct iommu_domain *domain,
+	struct cam_smmu_pf_info *pf_info)
+{
+	struct qcom_iommu_fault_ids fault_ids = {0, 0, 0};
+
+	if (qcom_iommu_get_fault_ids(domain, &fault_ids))
+		CAM_ERR(CAM_SMMU, "Cannot get smmu fault ids");
+	else
+		CAM_ERR(CAM_SMMU, "smmu fault ids bid:%d pid:%d mid:%d",
+			fault_ids.bid, fault_ids.pid, fault_ids.mid);
+
+	pf_info->bid = fault_ids.bid;
+	pf_info->pid = fault_ids.pid;
+	pf_info->mid = fault_ids.mid;
+}
+#else
+void cam_check_iommu_faults(struct iommu_domain *domain,
+	struct cam_smmu_pf_info *pf_info)
+{
+	struct iommu_fault_ids fault_ids = {0, 0, 0};
+
+	if (iommu_get_fault_ids(domain, &fault_ids))
+		CAM_ERR(CAM_SMMU, "Error: Can not get smmu fault ids");
+
+	CAM_ERR(CAM_SMMU, "smmu fault ids bid:%d pid:%d mid:%d",
+		fault_ids.bid, fault_ids.pid, fault_ids.mid);
+
+	pf_info->bid = fault_ids.bid;
+	pf_info->pid = fault_ids.pid;
+	pf_info->mid = fault_ids.mid;
+}
+#endif
+
+static int inline cam_subdev_list_cmp(struct cam_subdev *entry_1, struct cam_subdev *entry_2)
+{
+	if (entry_1->close_seq_prior > entry_2->close_seq_prior)
+		return 1;
+	else if (entry_1->close_seq_prior < entry_2->close_seq_prior)
+		return -1;
+	else
+		return 0;
+}
+
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 13, 0))
+struct file *cam_fcheck_files(struct files_struct *files, uint32_t fd)
+{
+       return fcheck_files(files, fd);
+}
+#else
+struct file *cam_fcheck_files(struct files_struct *files, uint32_t fd)
+{
+       return files_lookup_fd_rcu(files, fd);
+}
+#endif
+
+#if (KERNEL_VERSION(5, 18, 0) <= LINUX_VERSION_CODE)
+int cam_compat_util_get_dmabuf_va(struct dma_buf *dmabuf, uintptr_t *vaddr)
+{
+	struct iosys_map mapping;
+	int error_code = dma_buf_vmap(dmabuf, &mapping);
+
+	if (error_code) {
+		*vaddr = 0;
+	} else {
+		*vaddr = (mapping.is_iomem) ?
+			(uintptr_t)mapping.vaddr_iomem :
+			(uintptr_t)mapping.vaddr;
+		CAM_DBG(CAM_MEM,
+				"dmabuf=%p, *vaddr=%p, is_iomem=%d, vaddr_iomem=%p,vaddr=%p",
+				dmabuf, *vaddr, mapping.is_iomem, mapping.vaddr_iomem,
+				mapping.vaddr);
+	}
+
+	return error_code;
+}
+
+void cam_compat_util_put_dmabuf_va(struct dma_buf *dmabuf, void *vaddr)
+{
+	struct iosys_map mapping = IOSYS_MAP_INIT_VADDR(vaddr);
+
+	dma_buf_vunmap(dmabuf, &mapping);
+}
+
+int cam_req_mgr_ordered_list_cmp(void *priv,
+	const struct list_head *head_1, const struct list_head *head_2)
+{
+	return cam_subdev_list_cmp(list_entry(head_1, struct cam_subdev, list),
+		list_entry(head_2, struct cam_subdev, list));
+}
+
+void cam_smmu_util_iommu_custom(struct device *dev,
+	dma_addr_t discard_start, size_t discard_length)
+{
+	return;
+}
+
+void cam_close_fd(struct files_struct *files, uint32_t fd)
+{
+       close_fd(fd);
+}
+
+int cam_atomic_add_unless(struct file *file)
+{
+       return atomic_long_add_unless(&file->f_count, 1, 0);
+}
+
+#elif (KERNEL_VERSION(5, 15, 0) <= LINUX_VERSION_CODE)
+void cam_smmu_util_iommu_custom(struct device *dev,
+	dma_addr_t discard_start, size_t discard_length)
+{
+	return;
+}
+
+int cam_req_mgr_ordered_list_cmp(void *priv,
+	const struct list_head *head_1, const struct list_head *head_2)
+{
+	return cam_subdev_list_cmp(list_entry(head_1, struct cam_subdev, list),
+		list_entry(head_2, struct cam_subdev, list));
+}
+
+int cam_compat_util_get_dmabuf_va(struct dma_buf *dmabuf, uintptr_t *vaddr)
+{
+	struct dma_buf_map mapping;
+	int error_code = dma_buf_vmap(dmabuf, &mapping);
+
+	if (error_code)
+		*vaddr = 0;
+	else
+		*vaddr = (mapping.is_iomem) ?
+			(uintptr_t)mapping.vaddr_iomem : (uintptr_t)mapping.vaddr;
+
+	return error_code;
+}
+
+void cam_compat_util_put_dmabuf_va(struct dma_buf *dmabuf, void *vaddr)
+{
+	struct dma_buf_map mapping = DMA_BUF_MAP_INIT_VADDR(vaddr);
+
+	dma_buf_vunmap(dmabuf, &mapping);
+}
+
+
+void cam_close_fd(struct files_struct *files, uint32_t fd)
+{
+       __close_fd(files, fd);
+}
+
+int cam_atomic_add_unless(struct file *file)
+{
+       return get_file_rcu_many(file, 1);
+}
+
+#else
+void cam_smmu_util_iommu_custom(struct device *dev,
+	dma_addr_t discard_start, size_t discard_length)
+{
+	iommu_dma_enable_best_fit_algo(dev);
+
+	if (discard_start)
+		iommu_dma_reserve_iova(dev, discard_start, discard_length);
+
+	return;
+}
+
+int cam_req_mgr_ordered_list_cmp(void *priv,
+	struct list_head *head_1, struct list_head *head_2)
+{
+	return cam_subdev_list_cmp(list_entry(head_1, struct cam_subdev, list),
+		list_entry(head_2, struct cam_subdev, list));
+}
+
+int cam_compat_util_get_dmabuf_va(struct dma_buf *dmabuf, uintptr_t *vaddr)
+{
+	int error_code = 0;
+	void *addr = dma_buf_vmap(dmabuf);
+
+	if (!addr) {
+		*vaddr = 0;
+		error_code = -ENOSPC;
+	} else {
+		*vaddr = (uintptr_t)addr;
+	}
+
+	return error_code;
+}
+
+void cam_compat_util_put_dmabuf_va(struct dma_buf *dmabuf, void *vaddr)
+{
+	dma_buf_vunmap(dmabuf, vaddr);
+}
+
+void cam_close_fd(struct files_struct *files, uint32_t fd)
+{
+       __close_fd(files, fd);
+}
+
+int cam_atomic_add_unless(struct file *file)
+{
+       return get_file_rcu_many(file, 1);
+}
+
+#endif
+
+#if KERNEL_VERSION(5, 18, 0) <= LINUX_VERSION_CODE
+int cam_compat_util_get_irq(struct cam_hw_soc_info *soc_info)
+{
+	int rc = 0;
+	soc_info->irq_num = platform_get_irq(soc_info->pdev, 0);
+	if (soc_info->irq_num < 0) {
+		rc = soc_info->irq_num;
+	}
+	return rc;
+}
+
+void cam_eeprom_spi_driver_remove(struct spi_device *sdev)
+{
+	struct v4l2_subdev             *sd = spi_get_drvdata(sdev);
+	struct cam_eeprom_ctrl_t       *e_ctrl;
+	struct cam_eeprom_soc_private  *soc_private;
+	struct cam_hw_soc_info         *soc_info;
+
+	if (!sd) {
+		CAM_ERR(CAM_EEPROM, "Subdevice is NULL");
+		return;
+	}
+
+	e_ctrl = (struct cam_eeprom_ctrl_t *)v4l2_get_subdevdata(sd);
+	if (!e_ctrl) {
+		CAM_ERR(CAM_EEPROM, "eeprom device is NULL");
+		return;
+	}
+
+	soc_info = &e_ctrl->soc_info;
+	mutex_lock(&(e_ctrl->eeprom_mutex));
+	cam_eeprom_shutdown(e_ctrl);
+	mutex_unlock(&(e_ctrl->eeprom_mutex));
+	mutex_destroy(&(e_ctrl->eeprom_mutex));
+	cam_unregister_subdev(&(e_ctrl->v4l2_dev_str));
+	kfree(e_ctrl->io_master_info.spi_client);
+	e_ctrl->io_master_info.spi_client = NULL;
+	soc_private =
+		(struct cam_eeprom_soc_private *)e_ctrl->soc_info.soc_private;
+	if (soc_private) {
+		kfree(soc_private->power_info.gpio_num_info);
+		soc_private->power_info.gpio_num_info = NULL;
+		kfree(soc_private);
+		soc_private = NULL;
+	}
+	v4l2_set_subdevdata(&e_ctrl->v4l2_dev_str.sd, NULL);
+	kfree(e_ctrl);
+}
+#else
+int cam_compat_util_get_irq(struct cam_hw_soc_info *soc_info)
+{
+	int rc = 0;
+	soc_info->irq_line =
+		platform_get_resource_byname(soc_info->pdev,
+				IORESOURCE_IRQ, soc_info->irq_name);
+	if (!soc_info->irq_line) {
+		rc = -ENODEV;
+		return rc;
+	}
+	soc_info->irq_num = soc_info->irq_line->start;
+	return rc;
+}
+
+int cam_eeprom_spi_driver_remove(struct spi_device *sdev)
+{
+	struct v4l2_subdev             *sd = spi_get_drvdata(sdev);
+	struct cam_eeprom_ctrl_t       *e_ctrl;
+	struct cam_eeprom_soc_private  *soc_private;
+	struct cam_hw_soc_info         *soc_info;
+
+	if (!sd) {
+		CAM_ERR(CAM_EEPROM, "Subdevice is NULL");
+		return -EINVAL;
+	}
+
+	e_ctrl = (struct cam_eeprom_ctrl_t *)v4l2_get_subdevdata(sd);
+	if (!e_ctrl) {
+		CAM_ERR(CAM_EEPROM, "eeprom device is NULL");
+		return -EINVAL;
+	}
+
+	soc_info = &e_ctrl->soc_info;
+	mutex_lock(&(e_ctrl->eeprom_mutex));
+	cam_eeprom_shutdown(e_ctrl);
+	mutex_unlock(&(e_ctrl->eeprom_mutex));
+	mutex_destroy(&(e_ctrl->eeprom_mutex));
+	cam_unregister_subdev(&(e_ctrl->v4l2_dev_str));
+	kfree(e_ctrl->io_master_info.spi_client);
+	e_ctrl->io_master_info.spi_client = NULL;
+	soc_private =
+		(struct cam_eeprom_soc_private *)e_ctrl->soc_info.soc_private;
+	if (soc_private) {
+		kfree(soc_private->power_info.gpio_num_info);
+		soc_private->power_info.gpio_num_info = NULL;
+		kfree(soc_private);
+		soc_private = NULL;
+	}
+	v4l2_set_subdevdata(&e_ctrl->v4l2_dev_str.sd, NULL);
+	kfree(e_ctrl);
+
+	return 0;
+}
+#endif
+
+#if KERNEL_VERSION(6, 1, 0) <= LINUX_VERSION_CODE
+void cam_actuator_driver_i2c_remove(struct i2c_client *client)
+{
+	cam_actuator_i2c_component_del_wrapper(client);
+}
+
+void cam_eeprom_i2c_driver_remove(struct i2c_client *client)
+{
+	cam_eeprom_i2c_component_del_wrapper(client);
+}
+
+void cam_flash_i2c_driver_remove(struct i2c_client *client)
+{
+	cam_flash_i2c_component_del_wrapper(client);
+}
+
+void cam_ois_i2c_driver_remove(struct i2c_client *client)
+{
+	cam_ois_i2c_component_del_wrapper(client);
+}
+
+void cam_sensor_i2c_driver_remove(struct i2c_client *client)
+{
+	cam_sensor_i2c_component_del_wrapper(client);
+}
+
+#else
+int cam_actuator_driver_i2c_remove(struct i2c_client *client)
+{
+	cam_actuator_i2c_component_del_wrapper(client);
+
+	return 0;
+}
+
+int cam_eeprom_i2c_driver_remove(struct i2c_client *client)
+{
+	cam_eeprom_i2c_component_del_wrapper(client);
+
+	return 0;
+}
+
+int cam_flash_i2c_driver_remove(struct i2c_client *client)
+{
+	cam_flash_i2c_component_del_wrapper(client);
+
+	return 0;
+}
+
+int cam_ois_i2c_driver_remove(struct i2c_client *client)
+{
+	cam_ois_i2c_component_del_wrapper(client);
+
+	return 0;
+}
+
+int cam_sensor_i2c_driver_remove(struct i2c_client *client)
+{
+	cam_sensor_i2c_component_del_wrapper(client);
+
+	return 0;
+}
+#endif
+
+#if IS_REACHABLE(CONFIG_CAM_ENABLE_SOCCP)
+int cam_synx_enable_resources(uint32_t client_idx, uint32_t signal_id, bool enable)
+{
+	enum synx_client_id synx_client_idx;
+
+	synx_client_idx = cam_synx_map_camera_client_id_for_synx(client_idx, signal_id);
+	return synx_enable_resources(synx_client_idx, SYNX_RESOURCE_SOCCP, enable);
+}
+#else
+int cam_synx_enable_resources(uint32_t client_idx, uint32_t signal_id, bool enable)
+{
+	return 0;
+}
+#endif
+
+int cam_mem_buf_dma_buf_get_memparcel_hdl(struct dma_buf *dmabuf,
+	uint32_t *smmu_proxy_buf_hdl, struct cam_csf_version *csf_version)
+{
+#ifdef CONFIG_SECURE_CAMERA_25
+	if (IS_CSF25(csf_version->arch_ver,
+		csf_version->max_ver))
+		return mem_buf_dma_buf_get_memparcel_hdl(dmabuf, smmu_proxy_buf_hdl);
+#endif
+	return 0;
+}

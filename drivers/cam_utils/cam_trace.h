@@ -1,14 +1,7 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022, 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #if !defined(_CAM_TRACE_H) || defined(TRACE_HEADER_MULTI_READ)
@@ -19,13 +12,88 @@
 #undef TRACE_INCLUDE_PATH
 #define TRACE_INCLUDE_PATH .
 #undef TRACE_INCLUDE_FILE
-#define TRACE_INCLUDE_FILE cam_trace
+#define TRACE_INCLUDE_FILE ./cam_trace
 
 #include <linux/tracepoint.h>
+#include <clocksource/arm_arch_timer.h>
 #include <media/cam_req_mgr.h>
 #include "cam_req_mgr_core.h"
 #include "cam_req_mgr_interface.h"
 #include "cam_context.h"
+
+#define CAM_DEFAULT_VALUE 0xFF
+#define CAM_TRACE_PRINT_MAX_LEN 512
+
+TRACE_EVENT(cam_tunnel_id,
+	TP_PROTO(uint32_t tunnel_id, uint64_t req_id),
+	TP_ARGS(tunnel_id, req_id),
+	TP_STRUCT__entry(
+		__field(uint32_t, tunnel_id)
+		__field(uint64_t, req_id)
+	),
+	TP_fast_assign(
+		__entry->tunnel_id = tunnel_id;
+		__entry->req_id = req_id;
+	),
+	TP_printk(
+		"tunnel id: 0x%x req id: %lld",
+		__entry->tunnel_id, __entry->req_id)
+);
+
+TRACE_EVENT(cam_rpmsg,
+	TP_PROTO(const char *dev_name, const char *dir,
+		uint32_t pckt_size, const char *pckt_type),
+	TP_ARGS(dev_name, dir, pckt_size, pckt_type),
+	TP_STRUCT__entry(
+		__string(dev_name, dev_name)
+		__string(dir, dir)
+		__field(uint32_t, pckt_size)
+		__string(pckt_type, pckt_type)
+		__field(uint64_t, qtimer)
+	),
+	TP_fast_assign(
+		__assign_str(dev_name, dev_name);
+		__assign_str(dir, dir);
+		__entry->pckt_size = pckt_size;
+		__assign_str(pckt_type, pckt_type);
+		__entry->qtimer = arch_timer_read_counter();
+	),
+	TP_printk(
+		"%s: %s pckt_size=%d pckt_type=%s qtimer=%lld",
+			__get_str(dev_name), __get_str(dir),
+			__entry->pckt_size, __get_str(pckt_type),
+			__entry->qtimer
+	)
+);
+
+TRACE_EVENT(cam_rpmsg_isp,
+	TP_PROTO(const char *dev_name, const char *dir,
+		uint64_t req_id, uint32_t sensor_id,
+		uint32_t pckt_size, const char *pckt_type),
+	TP_ARGS(dev_name, dir, req_id, sensor_id, pckt_size, pckt_type),
+	TP_STRUCT__entry(
+		__string(dev_name, dev_name)
+		__string(dir, dir)
+		__field(uint64_t, req_id)
+		__field(uint32_t, sensor_id)
+		__field(uint32_t, pckt_size)
+		__string(pckt_type, pckt_type)
+	),
+	TP_fast_assign(
+		__assign_str(dev_name, dev_name);
+		__assign_str(dir, dir);
+		__entry->req_id = req_id;
+		__entry->sensor_id = sensor_id;
+		__entry->pckt_size = pckt_size;
+		__assign_str(pckt_type, pckt_type);
+	),
+	TP_printk(
+		"%s: %s req_id=%d sensor_id=0x%x pckt_size=%d pckt_type=%s",
+			__get_str(dev_name), __get_str(dir),
+			__entry->req_id, __entry->sensor_id,
+			__entry->pckt_size, __get_str(pckt_type)
+	)
+);
 
 TRACE_EVENT(cam_context_state,
 	TP_PROTO(const char *name, struct cam_context *ctx),
@@ -56,6 +124,7 @@ TRACE_EVENT(cam_isp_activated_irq,
 		__field(uint32_t, substate)
 		__field(uint32_t, event)
 		__field(uint64_t, ts)
+		__field(int32_t, link_hdl)
 	),
 	TP_fast_assign(
 		__entry->ctx = ctx;
@@ -63,13 +132,55 @@ TRACE_EVENT(cam_isp_activated_irq,
 		__entry->substate = substate;
 		__entry->event = event;
 		__entry->ts = timestamp;
+		__entry->link_hdl = ctx->link_hdl;
+
 	),
 	TP_printk(
-		"ISP: IRQ ctx=%p ctx_state=%u substate=%u event=%u ts=%llu",
+		"ISP: IRQ ctx=%p ctx_state=%u substate=%u event=%u ts=%llu link_hdl=0x%x",
 			__entry->ctx, __entry->state, __entry->substate,
-			__entry->event, __entry->ts
+			__entry->event, __entry->ts, __entry->link_hdl
 	)
 );
+
+TRACE_EVENT(cam_log_event,
+	TP_PROTO(const char *string1, const char *string2,
+		uint64_t val1, uint64_t val2),
+	TP_ARGS(string1, string2, val1, val2),
+	TP_STRUCT__entry(
+		__string(string1, string1)
+		__string(string2, string2)
+		__field(uint64_t, val1)
+		__field(uint64_t, val2)
+	),
+	TP_fast_assign(
+		__assign_str(string1, string1);
+		__assign_str(string2, string2);
+		__entry->val1 = val1;
+		__entry->val2 = val2;
+	),
+	TP_printk(
+		"%s: %s val1=%llu val2=%llu",
+			__get_str(string1), __get_str(string2),
+			__entry->val1, __entry->val2
+	)
+);
+
+TRACE_EVENT(cam_log_debug,
+	TP_PROTO(const char *fmt, va_list *args),
+	TP_ARGS(fmt, args),
+	TP_STRUCT__entry(
+		__dynamic_array(char, msg, CAM_TRACE_PRINT_MAX_LEN)
+	),
+	TP_fast_assign(
+		va_list ap;
+
+		va_copy(ap, *args);
+		vsnprintf(__get_dynamic_array(msg), CAM_TRACE_PRINT_MAX_LEN, fmt, ap);
+		va_end(ap);
+	),
+	TP_printk("%s", __get_str(msg))
+);
+
 
 TRACE_EVENT(cam_icp_fw_dbg,
 	TP_PROTO(char *dbg_message, uint64_t timestamp),
@@ -90,25 +201,127 @@ TRACE_EVENT(cam_icp_fw_dbg,
 
 TRACE_EVENT(cam_buf_done,
 	TP_PROTO(const char *ctx_type, struct cam_context *ctx,
-		struct cam_ctx_request *req),
-	TP_ARGS(ctx_type, ctx, req),
+		struct cam_ctx_request *req, uint64_t global_timestamp),
+	TP_ARGS(ctx_type, ctx, req, global_timestamp),
 	TP_STRUCT__entry(
 		__string(ctx_type, ctx_type)
 		__field(void*, ctx)
+		__field(int32_t, link_hdl)
 		__field(uint64_t, request)
+		__field(uint64_t, global_timestamp)
 	),
 	TP_fast_assign(
 		__assign_str(ctx_type, ctx_type);
 		__entry->ctx = ctx;
+		__entry->link_hdl = ctx->link_hdl;
 		__entry->request = req->request_id;
+		__entry->global_timestamp = global_timestamp;
 	),
 	TP_printk(
-		"%5s: BufDone ctx=%p request=%llu",
-			__get_str(ctx_type), __entry->ctx, __entry->request
+		"%5s: BufDone ctx=%p request=%llu link_hdl=0x%x global_timestamp %llu",
+			__get_str(ctx_type), __entry->ctx, __entry->request, __entry->link_hdl,
+			__entry->global_timestamp
+	)
+);
+
+TRACE_EVENT(cam_isp_buf_done,
+	TP_PROTO(const char *ctx_type, const char *status, struct cam_context *ctx, uint64_t req_id,
+		uint32_t resource_hdl),
+	TP_ARGS(ctx_type, status, ctx, req_id, resource_hdl),
+	TP_STRUCT__entry(
+		__string(ctx_type, ctx_type)
+		__string(status, status)
+		__field(void*, ctx)
+		__field(int32_t, link_hdl)
+		__field(uint64_t, req_id)
+		__field(uint32_t, ctx_id)
+		__field(uint32_t, resource_hdl)
+	),
+	TP_fast_assign(
+		__assign_str(ctx_type, ctx_type);
+		__assign_str(status, status);
+		__entry->ctx = ctx;
+		__entry->link_hdl = ctx->link_hdl;
+		__entry->req_id = req_id;
+		__entry->ctx_id = ctx->ctx_id;
+		__entry->resource_hdl = resource_hdl;
+	),
+	TP_printk(
+		"%5s: BufDone ctx=%p request=%llu link_hdl=0x%x ctx_id=%u res:0x%x %s",
+			__get_str(ctx_type),  __entry->ctx, __entry->req_id, __entry->link_hdl,
+			__entry->ctx_id, __entry->resource_hdl,
+			__get_str(status)
 	)
 );
 
 TRACE_EVENT(cam_apply_req,
+	TP_PROTO(const char *entity, uint32_t id, uint64_t req_id,int32_t link_hdl),
+	TP_ARGS(entity, id, req_id, link_hdl),
+	TP_STRUCT__entry(
+		__string(entity, entity)
+		__field(uint32_t, id)
+		__field(uint64_t, req_id)
+		__field(int32_t, link_hdl)
+	),
+	TP_fast_assign(
+		__assign_str(entity, entity);
+		__entry->id = id;
+		__entry->req_id = req_id;
+		__entry->link_hdl = link_hdl;
+	),
+	TP_printk(
+		"%8s: ApplyRequest id=%u request=%llu link_hdl=0x%x",
+			__get_str(entity), __entry->id, __entry->req_id, __entry->link_hdl
+	)
+);
+
+TRACE_EVENT(cam_ul_fastpath_bufdone,
+	TP_PROTO(const char *entity, uint32_t id, uint64_t ts, int32_t link_hdl),
+	TP_ARGS(entity, id, ts, link_hdl),
+	TP_STRUCT__entry(
+		__string(entity, entity)
+		__field(uint32_t, id)
+		__field(uint64_t, ts)
+		__field(int32_t, link_hdl)
+	),
+	TP_fast_assign(
+		__assign_str(entity, entity);
+		__entry->id = id;
+		__entry->ts = ts;
+		__entry->link_hdl = link_hdl;
+	),
+	TP_printk(
+		"%8s: Ctx=%u ts=%llu  link_hdl=0x%x",
+			__get_str(entity), __entry->id, __entry->ts, __entry->link_hdl
+	)
+);
+
+TRACE_EVENT(cam_ul_fastpath_retrieve,
+	TP_PROTO(const char *entity, uint32_t id, uint32_t setting, uint64_t ts, int32_t link_hdl),
+	TP_ARGS(entity, id, setting, ts, link_hdl),
+	TP_STRUCT__entry(
+		__string(entity, entity)
+		__field(uint32_t, id)
+		__field(uint32_t, setting)
+		__field(uint64_t, ts)
+		__field(int32_t, link_hdl)
+	),
+	TP_fast_assign(
+		__assign_str(entity, entity);
+		__entry->id = id;
+		__entry->setting = setting;
+		__entry->ts = ts;
+		__entry->link_hdl = link_hdl;
+	),
+	TP_printk(
+		"%8s: Ctx=%u setting=%u ts=%llu  link_hdl=0x%x",
+			__get_str(entity), __entry->id, __entry->setting, __entry->ts,
+			__entry->link_hdl
+	)
+);
+
+
+TRACE_EVENT(cam_notify_frame_skip,
 	TP_PROTO(const char *entity, uint64_t req_id),
 	TP_ARGS(entity, req_id),
 	TP_STRUCT__entry(
@@ -120,7 +333,7 @@ TRACE_EVENT(cam_apply_req,
 		__entry->req_id = req_id;
 	),
 	TP_printk(
-		"%8s: ApplyRequest request=%llu",
+		"%8s: NotifyFrameSkip request=%llu",
 			__get_str(entity), __entry->req_id
 	)
 );
@@ -182,6 +395,7 @@ TRACE_EVENT(cam_req_mgr_apply_request,
 		__string(name, dev->dev_info.name)
 		__field(uint32_t, dev_id)
 		__field(uint64_t, req_id)
+		__field(int32_t, link_hdl)
 		__field(void*, link)
 		__field(void*, session)
 	),
@@ -191,11 +405,12 @@ TRACE_EVENT(cam_req_mgr_apply_request,
 		__entry->req_id  = req->request_id;
 		__entry->link    = link;
 		__entry->session = link->parent;
+		__entry->link_hdl = req->link_hdl;
 	),
 	TP_printk(
-		"ReqMgr ApplyRequest devname=%s devid=%u request=%lld link=%pK session=%pK",
+		"ReqMgr ApplyRequest devname=%s devid=%u request=%lld link=%pK session=%pK link_hdl=0x%x",
 			__get_str(name), __entry->dev_id, __entry->req_id,
-			__entry->link, __entry->session
+			__entry->link, __entry->session, __entry->link_hdl
 	)
 );
 
@@ -215,6 +430,7 @@ TRACE_EVENT(cam_req_mgr_add_req,
 		__field(uint32_t, devicemap)
 		__field(void*, link)
 		__field(void*, session)
+		__field(int32_t, link_hdl)
 	),
 	TP_fast_assign(
 		__assign_str(name, dev->dev_info.name);
@@ -225,13 +441,48 @@ TRACE_EVENT(cam_req_mgr_add_req,
 		__entry->readymap  = tbl->slot[idx].req_ready_map;
 		__entry->devicemap = tbl->dev_mask;
 		__entry->link      = link;
+		__entry->link_hdl  = link->link_hdl;
 		__entry->session   = link->parent;
 	),
 	TP_printk(
-		"ReqMgr AddRequest devname=%s devid=%d request=%lld slot=%d pd=%d readymap=%x devicemap=%d link=%pK session=%pK",
+		"ReqMgr AddRequest devname=%s devid=%d request=%lld slot=%d pd=%d readymap=%x devicemap=%d link=%pK session=%pK link_hdl=0x%x",
 			__get_str(name), __entry->dev_id, __entry->req_id,
 			__entry->slot_id, __entry->delay, __entry->readymap,
-			__entry->devicemap, __entry->link, __entry->session
+			__entry->devicemap, __entry->link, __entry->session,
+			__entry->link_hdl
+	)
+);
+
+TRACE_EVENT(cam_delay_detect,
+	TP_PROTO(const char *entity,
+		const char *text, uint64_t req_id,
+		uint32_t ctx_id, int32_t link_hdl,
+		int32_t session_hdl, int rc),
+	TP_ARGS(entity, text, req_id, ctx_id,
+		link_hdl, session_hdl, rc),
+	TP_STRUCT__entry(
+		__string(entity, entity)
+		__string(text, text)
+		__field(uint64_t, req_id)
+		__field(uint64_t, ctx_id)
+		__field(int32_t, link_hdl)
+		__field(int32_t, session_hdl)
+		__field(int32_t, rc)
+	),
+	TP_fast_assign(
+		__assign_str(entity, entity);
+		__assign_str(text, text);
+		__entry->req_id      = req_id;
+		__entry->ctx_id      = ctx_id;
+		__entry->link_hdl    = link_hdl;
+		__entry->session_hdl = session_hdl;
+		__entry->rc          = rc;
+	),
+	TP_printk(
+		"%s: %s request=%lld ctx_id=%d link_hdl=0x%x session_hdl=0x%x rc=%d",
+			__get_str(entity), __get_str(text), __entry->req_id,
+			__entry->ctx_id, __entry->link_hdl,
+			__entry->session_hdl, __entry->rc
 	)
 );
 

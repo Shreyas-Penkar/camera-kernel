@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2018, 2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _CAM_HW_H_
@@ -37,6 +31,8 @@ enum cam_hw_state {
  * @soc_info:              Platform SOC properties for hardware
  * @node_info:             Private HW data related to nodes
  * @core_info:             Private HW data related to core logic
+ * @presil_hw_lock:        Mutex lock used for presil in place of hw_lock,
+ *                         for drivers like CDM
  *
  */
 struct cam_hw_info {
@@ -48,6 +44,11 @@ struct cam_hw_info {
 	struct cam_hw_soc_info          soc_info;
 	void                           *node_info;
 	void                           *core_info;
+	bool                            is_virtual;
+
+#ifdef CONFIG_CAM_PRESIL
+	struct mutex                    presil_hw_lock;
+#endif
 };
 
 #endif /* _CAM_HW_H_ */

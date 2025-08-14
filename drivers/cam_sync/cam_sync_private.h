@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef __CAM_SYNC_PRIVATE_H__
@@ -23,6 +17,16 @@
 #include <media/v4l2-subdev.h>
 #include <media/v4l2-event.h>
 #include <media/v4l2-ioctl.h>
+#include "cam_sync_api.h"
+#include "cam_sync_dma_fence.h"
+
+#if IS_REACHABLE(CONFIG_MSM_GLOBAL_SYNX_V2)
+#include "cam_sync_synx.h"
+#endif
+
+#if IS_REACHABLE(CONFIG_MSM_GLOBAL_SYNX) || IS_REACHABLE(CONFIG_MSM_GLOBAL_SYNX_V2)
+#include <synx_api.h>
+#endif
 
 #ifdef CONFIG_CAM_SYNC_DBG
 #define CDBG(fmt, args...) pr_err(fmt, ##args)
@@ -31,17 +35,20 @@
 #endif
 
 #define CAM_SYNC_OBJ_NAME_LEN           64
-#define CAM_SYNC_MAX_OBJS               1024
-#define CAM_SYNC_MAX_V4L2_EVENTS        50
+#define CAM_SYNC_MAX_OBJS               2048
+#define CAM_SYNC_MAX_V4L2_EVENTS        250
 #define CAM_SYNC_DEBUG_FILENAME         "cam_debug"
 #define CAM_SYNC_DEBUG_BASEDIR          "cam"
 #define CAM_SYNC_DEBUG_BUF_SIZE         32
 #define CAM_SYNC_PAYLOAD_WORDS          2
 #define CAM_SYNC_NAME                   "cam_sync"
-#define CAM_SYNC_WORKQUEUE_NAME         "HIPRIO_SYNC_WORK_QUEUE"
+#define CAM_SYNC_MAX_SYNC_MANAGER       16
 
 #define CAM_SYNC_TYPE_INDV              0
 #define CAM_SYNC_TYPE_GROUP             1
+
+/* Maximum number of external fence payloads */
+#define CAM_SYNC_MAX_EXT_FENCE_PAYLOADS 256
 
 /**
  * enum sync_type - Enum to indicate the type of sync object,
@@ -65,6 +72,12 @@ enum sync_type {
 enum sync_list_clean_type {
 	SYNC_LIST_CLEAN_ONE,
 	SYNC_LIST_CLEAN_ALL
+};
+
+enum sync_is_uid_valid {
+	SYNC_UID_CURRENT,
+	SYNC_UID_NEW,
+	SYNC_UID_OLD
 };
 
 /**
@@ -96,19 +109,17 @@ struct sync_child_info {
  * struct sync_callback_info - Single node of information about a kernel
  * callback registered on a sync object
  *
- * @callback_func    : Callback function, registered by client driver
- * @cb_data          : Callback data, registered by client driver
- * @status........   : Status with which callback will be invoked in client
- * @sync_obj         : Sync id of the object for which callback is registered
- * @cb_dispatch_work : Work representing the call dispatch
- * @list             : List member used to append this node to a linked list
+ * @callback_func      : Callback function, registered by client driver
+ * @cb_data            : Callback data, registered by client driver
+ * @status             : Status with which callback will be invoked in client
+ * @sync_obj           : Sync id of the object for which callback is registered
+ * @list               : List member used to append this node to a linked list
  */
 struct sync_callback_info {
 	sync_callback callback_func;
 	void *cb_data;
 	int status;
 	int32_t sync_obj;
-	struct work_struct cb_dispatch_work;
 	struct list_head list;
 };
 
@@ -125,25 +136,92 @@ struct sync_user_payload {
 };
 
 /**
+ * struct sync_uid_info - Structure storing information to access
+ * the sync uid for fence reuse and mask to access the sync id that
+ * we get when new fence is created
+ */
+struct sync_uid_info {
+	uint32_t fenceIdMask;
+	int32_t uidShift;
+	uint32_t init_uid_val;
+};
+
+/**
+ * struct sync_dma_fence_info - DMA fence info associated with this sync obj
+ *
+ * @dma_fence_fd          : DMA fence fd
+ * @dma_fence_row_idx     : Index of the row corresponding to this dma fence
+ *                          in the dma fence table
+ * @sync_created_with_dma : If sync obj and dma fence are created together
+ * @is_valid              : set true when there is a DMA associated with sync
+ */
+struct sync_dma_fence_info {
+	int32_t dma_fence_fd;
+	int32_t dma_fence_row_idx;
+	bool    sync_created_with_dma;
+	bool    is_valid;
+};
+
+/**
+ * struct sync_synx_obj_info - Synx object info associated with this sync obj
+ *
+ * @synx_obj               : Synx object handle
+ * @synx_obj_row_idx       : Index of the row corresponding to this synx obj
+ *                           in the synx obj table
+ * @sync_created_with_synx : If sync obj and synx obj are created together
+ * @is_valid               : set true when there is a Synx associated with sync
+ */
+struct sync_synx_obj_info {
+	uint32_t synx_obj;
+	int32_t  synx_obj_row_idx;
+	bool     sync_created_with_synx;
+	bool     is_valid;
+};
+
+/**
+ * struct sync_ext_fence_info - External fence info associated with a sync obj
+ *
+ * @list : List member used to append this node to a linked list
+ * @dma_fence_info : DMA fence info associated with this sync obj
+ * @synx_obj_info : Synx object info associated with this sync obj
+ *
+ */
+struct sync_ext_fence_info {
+	struct list_head list;
+	struct sync_dma_fence_info dma_fence_info;
+	struct sync_synx_obj_info synx_obj_info;
+};
+
+/**
  * struct sync_table_row - Single row of information about a sync object, used
  * for internal book keeping in the sync driver
  *
- * @name              : Optional string representation of the sync object
- * @type              : Type of the sync object (individual or group)
- * @sync_id           : Integer id representing this sync object
- * @parents_list      : Linked list of parents of this sync object
- * @children_list     : Linked list of children of this sync object
- * @state             : State (INVALID, ACTIVE, SIGNALED_SUCCESS or
- *                      SIGNALED_ERROR)
- * @remaining         : Count of remaining children that not been signaled
- * @signaled          : Completion variable on which block calls will wait
- * @callback_list     : Linked list of kernel callbacks registered
- * @user_payload_list : LInked list of user space payloads registered
- * @ref_cnt           : ref count of the number of usage of the fence.
+ * @name               : Optional string representation of the sync object
+ * @type               : Type of the sync object (individual or group)
+ * @sync_id            : Integer id representing this sync object
+ * @parents_list       : Linked list of parents of this sync object
+ * @children_list      : Linked list of children of this sync object
+ * @state              : State (INVALID, ACTIVE, SIGNALED_SUCCESS or
+ *                       SIGNALED_ERROR)
+ * @remaining          : Count of remaining children that not been signaled
+ * @hw_fence_client_idx: Index in the HW fence client table for this fence
+ * @signaled           : Completion variable on which block calls will wait
+ * @callback_list      : Linked list of kernel callbacks registered
+ * @user_payload_list  : LInked list of user space payloads registered
+ * @ref_cnt            : ref count of the number of usage of the fence.
+ * @uid                : Unique ID of the current fence that is using this sync obj
+ * @sync_manager_idx   : Sync manager index for fence
+ * @struct old_fence   : Unique ID and state of previous fence that used
+ *                       same sync obj
+ * @ext_fence_mask     : Mask to indicate associated external fence types
+ * @dma_fence_info     : dma fence info if associated
+ * @synx_obj_info      : synx obj info if associated
+ * @ext_fences         : linked list of external fences for this sync object
+ * @is_merged_primary  : flag to indicate if sync obj is merged primary
  */
 struct sync_table_row {
 	char name[CAM_SYNC_OBJ_NAME_LEN];
-	enum sync_type type;
+	uint32_t type;
 	int32_t sync_id;
 	/* List of parents, which are merged objects */
 	struct list_head parents_list;
@@ -151,11 +229,19 @@ struct sync_table_row {
 	struct list_head children_list;
 	uint32_t state;
 	uint32_t remaining;
+	int32_t hw_fence_client_idx;
 	struct completion signaled;
 	struct list_head callback_list;
 	struct list_head user_payload_list;
 	atomic_t ref_cnt;
-	uint32_t client_id;
+	uint16_t uid;
+	uint16_t sync_manager_idx;
+	unsigned long ext_fence_mask;
+	struct sync_dma_fence_info dma_fence_info;
+	struct sync_synx_obj_info synx_obj_info;
+	struct list_head ext_fences;
+	bool is_merged_primary;
+	bool signaling_en;
 };
 
 /**
@@ -175,31 +261,51 @@ struct cam_signalable_info {
 /**
  * struct sync_device - Internal struct to book keep sync driver details
  *
- * @vdev            : Video device
- * @v4l2_dev        : V4L2 device
- * @sync_table      : Table of all sync objects
- * @row_spinlocks   : Spinlock array, one for each row in the table
- * @table_lock      : Mutex used to lock the table
- * @open_cnt        : Count of file open calls made on the sync driver
- * @dentry          : Debugfs entry
- * @work_queue      : Work queue used for dispatching kernel callbacks
- * @cam_sync_eventq : Event queue used to dispatch user payloads to user space
- * @bitmap          : Bitmap representation of all sync objects
- * @err_cnt         : Error counter to dump fence table
+ * @vdev                  : Video device
+ * @v4l2_dev              : V4L2 device
+ * @sync_table            : Table of all sync objects
+ * @row_spinlocks         : Spinlock array, one for each row in the table
+ * @dentry                : Debugfs entry
+ * @worker                : Worker used for dispatching kernel callbacks
+ * @cam_sync_eventq       : Event queue used to dispatch user payloads to user space
+ * @bitmap                : Bitmap representation of all sync objects
+ * @open_cnt              : Count of file open calls made on the sync driver
+ * @sync_manager_id_mask  : Bit mask to get sync manager idx
+ * @sync_manager_id_shift : Bit shift required to get sync manager idx
+ * @params                : Parameters for synx call back registration
+ * @version               : version support
+ * @hw_fencing_en         : Indicates if HW fencing is enabled for a given target
+ * @nb                    : Notifier block used for remoteproc SSR
+ * @notifier              : Remoteproc SSR notifier
+ * @soccp_rproc           : Remoteproc info for power on/off SocCP
+ * @ref_cnt               : ref count of the number of HW fence session initialize/uninitialize
  */
 struct sync_device {
 	struct video_device *vdev;
 	struct v4l2_device v4l2_dev;
-	struct sync_table_row sync_table[CAM_SYNC_MAX_OBJS];
+	struct sync_table_row *sync_table;
 	spinlock_t row_spinlocks[CAM_SYNC_MAX_OBJS];
-	struct mutex table_lock;
-	int open_cnt;
 	struct dentry *dentry;
-	struct workqueue_struct *work_queue;
-	struct v4l2_fh *cam_sync_eventq;
-	spinlock_t cam_sync_eventq_lock;
+	struct cam_req_mgr_core_worker *worker;
+	struct v4l2_fh *cam_sync_eventq[CAM_SYNC_MAX_SYNC_MANAGER];
+	spinlock_t cam_sync_eventq_lock[CAM_SYNC_MAX_SYNC_MANAGER];
 	DECLARE_BITMAP(bitmap, CAM_SYNC_MAX_OBJS);
-	int err_cnt;
+	DECLARE_BITMAP(bitmap_syncmanager, CAM_SYNC_MAX_SYNC_MANAGER);
+	int open_cnt;
+	int sync_manager_id_mask;
+	int sync_manager_id_shift;
+#if IS_REACHABLE(CONFIG_MSM_GLOBAL_SYNX)
+	struct synx_register_params params;
+#endif
+	spinlock_t payload_lock;
+	struct list_head free_ext_fence_list;
+	struct sync_ext_fence_info ext_fence_info[CAM_SYNC_MAX_EXT_FENCE_PAYLOADS];
+	uint32_t version;
+	bool hw_fencing_en;
+	struct notifier_block nb;
+	void *notifier;
+	struct rproc *soccp_rproc;
+	int ref_cnt;
 };
 
 

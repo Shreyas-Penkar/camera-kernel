@@ -1,13 +1,6 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/of.h>
@@ -46,6 +39,21 @@ static int cam_ois_get_dt_data(struct cam_ois_ctrl_t *o_ctrl)
 		CAM_ERR(CAM_OIS, "cam_soc_util_get_dt_properties rc %d",
 			rc);
 		return rc;
+	}
+
+	/* Initialize regulators to default parameters */
+	for (i = 0; i < soc_info->num_rgltr; i++) {
+		soc_info->rgltr[i] = devm_regulator_get(soc_info->dev,
+					soc_info->rgltr_name[i]);
+		if (IS_ERR_OR_NULL(soc_info->rgltr[i])) {
+			rc = PTR_ERR(soc_info->rgltr[i]);
+			rc = rc ? rc : -EINVAL;
+			CAM_ERR(CAM_OIS, "get failed for regulator %s",
+				 soc_info->rgltr_name[i]);
+			return rc;
+		}
+		CAM_DBG(CAM_OIS, "get for regulator %s",
+			soc_info->rgltr_name[i]);
 	}
 
 	if (!soc_info->gpio_data) {
@@ -89,6 +97,7 @@ int cam_ois_driver_soc_init(struct cam_ois_ctrl_t *o_ctrl)
 	int                             rc = 0;
 	struct cam_hw_soc_info         *soc_info = &o_ctrl->soc_info;
 	struct device_node             *of_node = NULL;
+	struct device_node             *of_parent = NULL;
 
 	if (!soc_info->dev) {
 		CAM_ERR(CAM_OIS, "soc_info is not initialized");
@@ -109,16 +118,15 @@ int cam_ois_driver_soc_init(struct cam_ois_ctrl_t *o_ctrl)
 			return rc;
 		}
 
-		rc = of_property_read_u32(of_node, "cci-device",
-			&o_ctrl->cci_num);
-		CAM_DBG(CAM_ACTUATOR, "cci-device %d, rc %d",
-			o_ctrl->cci_num, rc);
-		if (rc < 0) {
+		of_parent = of_get_parent(of_node);
+		if (of_property_read_u32(of_parent, "cell-index",
+				&o_ctrl->cci_num) < 0)
 			/* Set default master 0 */
 			o_ctrl->cci_num = CCI_DEVICE_0;
-			rc = 0;
-		}
+
 		o_ctrl->io_master_info.cci_client->cci_device = o_ctrl->cci_num;
+		CAM_DBG(CAM_OIS, "cci-device %d", o_ctrl->cci_num, rc);
+
 	}
 
 	rc = cam_ois_get_dt_data(o_ctrl);

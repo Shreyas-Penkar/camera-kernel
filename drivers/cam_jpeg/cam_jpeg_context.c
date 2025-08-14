@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/debugfs.h>
@@ -16,7 +10,6 @@
 #include <linux/uaccess.h>
 
 #include "cam_mem_mgr.h"
-#include "cam_sync_api.h"
 #include "cam_jpeg_context.h"
 #include "cam_context_utils.h"
 #include "cam_debug_util.h"
@@ -24,17 +17,18 @@
 
 static const char jpeg_dev_name[] = "cam-jpeg";
 
-static int cam_jpeg_context_dump_active_request(void *data, unsigned long iova,
-	uint32_t buf_info)
+static int cam_jpeg_context_dump_active_request(void *data,
+	struct cam_smmu_pf_info *pf_info)
 {
 
 	struct cam_context *ctx = (struct cam_context *)data;
 	struct cam_ctx_request          *req = NULL;
 	struct cam_ctx_request          *req_temp = NULL;
 	struct cam_hw_mgr_dump_pf_data  *pf_dbg_entry = NULL;
+	uint32_t  resource_type = 0;
 	int rc = 0;
 	int closest_port;
-	bool b_mem_found = false;
+	bool b_mem_found = false, b_ctx_found = false;
 
 
 	if (!ctx) {
@@ -51,8 +45,8 @@ static int cam_jpeg_context_dump_active_request(void *data, unsigned long iova,
 		closest_port = -1;
 		CAM_INFO(CAM_JPEG, "req_id : %lld ", req->request_id);
 
-		rc = cam_context_dump_pf_info_to_hw(ctx, pf_dbg_entry->packet,
-			iova, buf_info, &b_mem_found);
+		rc = cam_context_dump_pf_info_to_hw(ctx, pf_dbg_entry,
+			&b_mem_found, &b_ctx_found, &resource_type, pf_info);
 		if (rc)
 			CAM_ERR(CAM_JPEG, "Failed to dump pf info");
 
@@ -60,6 +54,24 @@ static int cam_jpeg_context_dump_active_request(void *data, unsigned long iova,
 			CAM_ERR(CAM_JPEG, "Found page fault in req %lld %d",
 				req->request_id, rc);
 	}
+	return rc;
+}
+
+static int cam_jpeg_context_mini_dump(void *priv, void *args)
+{
+	int rc;
+	struct cam_context *ctx;
+
+	if (!priv || args) {
+		CAM_ERR(CAM_ICP, "Invalid param priv %pK args %pK", priv, args);
+		return -EINVAL;
+	}
+
+	ctx = (struct cam_context *)priv;
+	rc = cam_context_mini_dump(ctx, args);
+	if (rc)
+		CAM_ERR(CAM_JPEG, "Mini Dump failed %d", rc);
+
 	return rc;
 }
 
@@ -91,14 +103,15 @@ static int __cam_jpeg_ctx_release_dev_in_acquired(struct cam_context *ctx,
 	return rc;
 }
 
-static int __cam_jpeg_ctx_dump_dev_in_acquired(struct cam_context *ctx,
+static int __cam_jpeg_ctx_dump_dev_in_acquired(
+	struct cam_context      *ctx,
 	struct cam_dump_req_cmd *cmd)
 {
 	int rc;
 
 	rc = cam_context_dump_dev_to_hw(ctx, cmd);
 	if (rc)
-		CAM_ERR(CAM_ICP, "Failed to dump device, rc=%d", rc);
+		CAM_ERR(CAM_JPEG, "Failed to dump device, rc=%d", rc);
 
 	return rc;
 }
@@ -157,6 +170,7 @@ static struct cam_ctx_ops
 		},
 		.crm_ops = { },
 		.irq_ops = NULL,
+		.mini_dump_ops = cam_jpeg_context_mini_dump,
 	},
 	/* Acquired */
 	{
@@ -170,13 +184,27 @@ static struct cam_ctx_ops
 		.crm_ops = { },
 		.irq_ops = __cam_jpeg_ctx_handle_buf_done_in_acquired,
 		.pagefault_ops = cam_jpeg_context_dump_active_request,
+		.mini_dump_ops = cam_jpeg_context_mini_dump,
+	},
+	/* Ready */
+	{
+		.ioctl_ops = {},
+	},
+	/* Flushed */
+	{
+		.ioctl_ops = {},
+	},
+	/* Activated */
+	{
+		.ioctl_ops = {},
 	},
 };
 
 int cam_jpeg_context_init(struct cam_jpeg_context *ctx,
 	struct cam_context *ctx_base,
 	struct cam_hw_mgr_intf *hw_intf,
-	uint32_t ctx_id)
+	uint32_t ctx_id,
+	int img_iommu_hdl)
 {
 	int rc;
 	int i;
@@ -192,10 +220,10 @@ int cam_jpeg_context_init(struct cam_jpeg_context *ctx,
 	ctx->base = ctx_base;
 
 	for (i = 0; i < CAM_CTX_REQ_MAX; i++)
-		ctx->req_base[i].req_priv = ctx;
+		ctx->req_base[i].req_priv = &ctx->jpeg_req[i];
 
 	rc = cam_context_init(ctx_base, jpeg_dev_name, CAM_JPEG, ctx_id,
-		NULL, hw_intf, ctx->req_base, CAM_CTX_REQ_MAX);
+		NULL, NULL, hw_intf, ctx->req_base, CAM_CTX_REQ_MAX, img_iommu_hdl);
 	if (rc) {
 		CAM_ERR(CAM_JPEG, "Camera Context Base init failed");
 		goto err;
@@ -204,6 +232,9 @@ int cam_jpeg_context_init(struct cam_jpeg_context *ctx,
 	ctx_base->state_machine = cam_jpeg_ctx_state_machine;
 	ctx_base->ctx_priv = ctx;
 
+	ctx_base->max_hw_update_entries = CAM_CTX_CFG_MAX;
+	ctx_base->max_in_map_entries = CAM_CTX_CFG_MAX;
+	ctx_base->max_out_map_entries = CAM_CTX_CFG_MAX;
 err:
 	return rc;
 }

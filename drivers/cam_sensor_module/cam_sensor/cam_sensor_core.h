@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2018,2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _CAM_SENSOR_CORE_H_
@@ -44,8 +38,17 @@ int cam_sensor_power(struct v4l2_subdev *sd, int on);
  *
  * This API applies the req_id settings to sensor
  */
-int cam_sensor_apply_settings(struct cam_sensor_ctrl_t *s_ctrl, int64_t req_id,
+int cam_sensor_apply_settings(struct cam_sensor_ctrl_t *s_ctrl, uint64_t req_id,
 	enum cam_sensor_packet_opcodes opcode);
+
+/**
+ * @s_ctrl: Sensor ctrl structure
+ * @req_id: Request id
+ *
+ * This API applies the req_id settings to trigger sensor
+ */
+int cam_sensor_apply_event_settings(struct cam_sensor_ctrl_t *s_ctrl,
+	uint64_t req_id);
 
 /**
  * @apply: Req mgr structure for applying request
@@ -53,6 +56,21 @@ int cam_sensor_apply_settings(struct cam_sensor_ctrl_t *s_ctrl, int64_t req_id,
  * This API applies the request that is mentioned
  */
 int cam_sensor_apply_request(struct cam_req_mgr_apply_request *apply);
+
+/**
+ * @notify: anchor driver structure for applying request
+ *
+ * This API applies the request that is mentioned
+ */
+int cam_sensor_no_crm_apply_req(
+	struct cam_req_mgr_no_crm_apply_request *notify);
+
+/**
+ * @apply: Req mgr structure for notifying frame skip
+ *
+ * This API notifies a frame is skipped
+ */
+int cam_sensor_notify_frame_skip(struct cam_req_mgr_apply_request *apply);
 
 /**
  * @flush: Req mgr structure for flushing request
@@ -69,11 +87,59 @@ int cam_sensor_flush_request(struct cam_req_mgr_flush_request *flush);
 int cam_sensor_publish_dev_info(struct cam_req_mgr_device_info *info);
 
 /**
+ * @info: Sub device handshake with anchor driver(isp)
+ *
+ * Publish the subdevice info
+ */
+int cam_sensor_no_crm_handshake(
+		struct cam_req_mgr_no_crm_handshake_data *info);
+/**
  * @link: Link setup info
  *
  * This API establishes link with sensor subdevice with req mgr
  */
 int cam_sensor_establish_link(struct cam_req_mgr_core_dev_link_setup *link);
+
+/**
+ * @pause: pause event data
+ *
+ * This API pauses the request apply in to the sensor
+ */
+int cam_sensor_no_crm_pause_apply(
+	struct cam_req_mgr_no_crm_pause_evt_data *pause);
+
+/**
+ * @add: Add request packet
+ *
+ * This API add the request to the sensor queue
+ */
+int cam_sensor_no_crm_add_req(int32_t dev_hdl, struct cam_packet *packet,
+	struct port_pattern_period *port_enable_pattern_period);
+
+/**
+ * @notify_dev: Callback to notify dev to process cmd
+ *
+ * This API request dev to process requested command
+ */
+int cam_sensor_no_crm_notify_dev(uint32_t dev_hdl,
+	struct cam_req_mgr_no_crm_notify_device *notify_subdev);
+
+/**
+ * @add: Add request to the per frame queue
+ *
+ * This API add the request to the sensor queue
+ */
+int cam_sensor_no_crm_add_req_ul(struct cam_sensor_ctrl_t *s_ctrl,
+	struct cam_packet *packet,
+	struct port_pattern_period *port_enable_pattern_period);
+
+/**
+ * @resume: resume event data.
+ *
+ * This API resumes request apply to the sensor
+ */
+int cam_sensor_no_crm_resume_apply(
+	struct cam_req_mgr_no_crm_resume_evt_data *resume);
 
 /**
  * @s_ctrl: Sensor ctrl structure

@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _CAM_SENSOR_CMN_HEADER_
@@ -20,72 +14,36 @@
 #include <linux/timer.h>
 #include <linux/delay.h>
 #include <linux/list.h>
-#include <media/ais_sensor.h>
+
+#include <dt-bindings/msm-camera.h>
 #include <media/cam_sensor.h>
 #include <media/cam_req_mgr.h>
 
-#define MAX_REGULATOR 5
-#define MAX_POWER_CONFIG 12
+#define MAX_POWER_CONFIG    12
 
 #define MAX_PER_FRAME_ARRAY 32
 #define BATCH_SIZE_MAX      16
 
-#define CAM_SENSOR_NAME    "cam-sensor"
-#define CAM_ACTUATOR_NAME  "cam-actuator"
-#define CAM_CSIPHY_NAME    "cam-csiphy"
-#define CAM_FLASH_NAME     "cam-flash"
-#define CAM_EEPROM_NAME    "cam-eeprom"
-#define CAM_OIS_NAME       "cam-ois"
+#define CAM_SENSOR_NAME           "cam-sensor"
+#define CAM_ACTUATOR_NAME         "cam-actuator"
+#define CAM_CSIPHY_NAME           "cam-csiphy"
+#define CAM_FLASH_NAME            "cam-flash"
+#define CAM_EEPROM_NAME           "cam-eeprom"
+#define CAM_OIS_NAME              "cam-ois"
+#define CAM_TPG_NAME              "cam-tpg"
+#define CAM_SENSOR_LITE_NAME      "cam-sensor-lite"
 
 #define MAX_SYSTEM_PIPELINE_DELAY 2
 
 #define CAM_PKT_NOP_OPCODE 127
-
-enum camera_sensor_cmd_type {
-	CAMERA_SENSOR_CMD_TYPE_INVALID,
-	CAMERA_SENSOR_CMD_TYPE_PROBE,
-	CAMERA_SENSOR_CMD_TYPE_PWR_UP,
-	CAMERA_SENSOR_CMD_TYPE_PWR_DOWN,
-	CAMERA_SENSOR_CMD_TYPE_I2C_INFO,
-	CAMERA_SENSOR_CMD_TYPE_I2C_RNDM_WR,
-	CAMERA_SENSOR_CMD_TYPE_I2C_RNDM_RD,
-	CAMERA_SENSOR_CMD_TYPE_I2C_CONT_WR,
-	CAMERA_SENSOR_CMD_TYPE_I2C_CONT_RD,
-	CAMERA_SENSOR_CMD_TYPE_WAIT,
-	CAMERA_SENSOR_FLASH_CMD_TYPE_INIT_INFO,
-	CAMERA_SENSOR_FLASH_CMD_TYPE_FIRE,
-	CAMERA_SENSOR_FLASH_CMD_TYPE_RER,
-	CAMERA_SENSOR_FLASH_CMD_TYPE_QUERYCURR,
-	CAMERA_SENSOR_FLASH_CMD_TYPE_WIDGET,
-	CAMERA_SENSOR_CMD_TYPE_RD_DATA,
-	CAMERA_SENSOR_FLASH_CMD_TYPE_INIT_FIRE,
-	CAMERA_SENSOR_CMD_TYPE_MAX,
-};
-
-enum camera_sensor_i2c_op_code {
-	CAMERA_SENSOR_I2C_OP_INVALID,
-	CAMERA_SENSOR_I2C_OP_RNDM_WR,
-	CAMERA_SENSOR_I2C_OP_RNDM_WR_VERF,
-	CAMERA_SENSOR_I2C_OP_CONT_WR_BRST,
-	CAMERA_SENSOR_I2C_OP_CONT_WR_BRST_VERF,
-	CAMERA_SENSOR_I2C_OP_CONT_WR_SEQN,
-	CAMERA_SENSOR_I2C_OP_CONT_WR_SEQN_VERF,
-	CAMERA_SENSOR_I2C_OP_MAX,
-};
-
-enum camera_sensor_wait_op_code {
-	CAMERA_SENSOR_WAIT_OP_INVALID,
-	CAMERA_SENSOR_WAIT_OP_COND,
-	CAMERA_SENSOR_WAIT_OP_HW_UCND,
-	CAMERA_SENSOR_WAIT_OP_SW_UCND,
-	CAMERA_SENSOR_WAIT_OP_MAX,
-};
+#define MAX_CMD_BUFFER 10
 
 enum camera_flash_opcode {
 	CAMERA_SENSOR_FLASH_OP_INVALID,
 	CAMERA_SENSOR_FLASH_OP_OFF,
 	CAMERA_SENSOR_FLASH_OP_FIRELOW,
 	CAMERA_SENSOR_FLASH_OP_FIREHIGH,
+	CAMERA_SENSOR_FLASH_OP_FIREDURATION,
 	CAMERA_SENSOR_FLASH_OP_MAX,
 };
 
@@ -133,7 +91,6 @@ enum sensor_sub_module {
 	SUB_MODULE_CSID,
 	SUB_MODULE_CSIPHY,
 	SUB_MODULE_OIS,
-	SUB_MODULE_IR_LED,
 	SUB_MODULE_EXT,
 	SUB_MODULE_MAX,
 };
@@ -151,32 +108,11 @@ enum msm_camera_power_seq_type {
 	SENSOR_STANDBY,
 	SENSOR_CUSTOM_GPIO1,
 	SENSOR_CUSTOM_GPIO2,
+	SENSOR_VANA1,
+	SENSOR_CUSTOM_GPIO3,
+	SENSOR_CUSTOM_GPIO4,
+	SENSOR_CUSTOM_GPIO5,
 	SENSOR_SEQ_TYPE_MAX,
-};
-
-enum cam_sensor_packet_opcodes {
-	CAM_SENSOR_PACKET_OPCODE_SENSOR_STREAMON,
-	CAM_SENSOR_PACKET_OPCODE_SENSOR_UPDATE,
-	CAM_SENSOR_PACKET_OPCODE_SENSOR_INITIAL_CONFIG,
-	CAM_SENSOR_PACKET_OPCODE_SENSOR_PROBE,
-	CAM_SENSOR_PACKET_OPCODE_SENSOR_CONFIG,
-	CAM_SENSOR_PACKET_OPCODE_SENSOR_STREAMOFF,
-	CAM_SENSOR_PACKET_OPCODE_SENSOR_NOP = 127
-};
-
-enum cam_actuator_packet_opcodes {
-	CAM_ACTUATOR_PACKET_OPCODE_INIT,
-	CAM_ACTUATOR_PACKET_AUTO_MOVE_LENS,
-	CAM_ACTUATOR_PACKET_MANUAL_MOVE_LENS
-};
-
-enum cam_eeprom_packet_opcodes {
-	CAM_EEPROM_PACKET_OPCODE_INIT
-};
-
-enum cam_ois_packet_opcodes {
-	CAM_OIS_PACKET_OPCODE_INIT,
-	CAM_OIS_PACKET_OPCODE_OIS_CONTROL
 };
 
 enum msm_bus_perf_setting {
@@ -206,9 +142,9 @@ enum cam_flash_device_type {
 };
 
 enum cci_i2c_master_t {
-	MASTER_0,
-	MASTER_1,
-	MASTER_MAX,
+	MASTER_0 = CCI_MASTER_0,
+	MASTER_1 = CCI_MASTER_1,
+	MASTER_MAX = CCI_MASTER_MAX,
 };
 
 enum cci_device_num {
@@ -226,15 +162,17 @@ enum cam_sensor_i2c_cmd_type {
 	CAM_SENSOR_I2C_WRITE_RANDOM,
 	CAM_SENSOR_I2C_WRITE_BURST,
 	CAM_SENSOR_I2C_WRITE_SEQ,
-	CAM_SENSOR_I2C_READ,
+	CAM_SENSOR_I2C_READ_RANDOM,
+	CAM_SENSOR_I2C_READ_SEQ,
 	CAM_SENSOR_I2C_POLL,
-	CAM_SENSOR_I2C_SET_I2C_INFO
+	CAM_SENSOR_I2C_NOP
 };
 
 struct common_header {
-	uint16_t    first_word;
-	uint8_t     third_byte;
+	uint32_t    first_word;
+	uint8_t     fifth_byte;
 	uint8_t     cmd_type;
+	uint16_t    reserved;
 };
 
 struct camera_vreg_t {
@@ -272,22 +210,98 @@ struct cam_sensor_i2c_reg_array {
 	uint32_t data_mask;
 };
 
+/**
+ * struct cam_cci_trigger_data
+ * @csid:          CSID of sensor
+ * @cid:           CID of sensor
+ * @context_id:    Context ID of Trigger sensor
+ */
+struct cam_cci_trigger_data {
+	uint32_t csid;
+	uint32_t cid;
+	uint32_t context_id;
+	uint32_t gpio_mask;
+};
+
 struct cam_sensor_i2c_reg_setting {
 	struct cam_sensor_i2c_reg_array *reg_setting;
-	unsigned short size;
+	uint32_t size;
 	enum camera_sensor_i2c_type addr_type;
 	enum camera_sensor_i2c_type data_type;
 	unsigned short delay;
+	uint8_t *read_buff;
+	uint32_t read_buff_len;
 };
 
-struct cam_sensor_i2c_slave_info {
-	uint16_t slave_addr;
-	uint8_t i2c_freq_mode;
+struct cam_sensor_i2c_seq_reg {
+	uint32_t reg_addr;
+	uint8_t  *reg_data;
+	uint32_t size;
+	enum camera_sensor_i2c_type addr_type;
+};
+
+struct cam_sensor_frame_event_data {
+	uint16_t vc;
+	uint16_t dt;
+	uint32_t streamId;
+	uint32_t frame_event;
+};
+
+struct cam_sensor_fsin_data {
+	uint32_t gpio_mask;
+	uint64_t pre_delay;
+	uint64_t post_delay;
+	uint32_t level;
+	uint32_t config;
+};
+
+enum cam_sensor_cmd_buffer_type {
+	CAM_SENSOR_CMD_TYPE_I2C_SETTING,
+	CAM_SENSOR_CMD_TYPE_QTIMER,
+	CAM_SENSOR_CMD_TYPE_FSIN_TRIGGER,
+	CAM_SENSOR_CMD_TYPE_TIMER,
+	CAM_SENSOR_CMD_TYPE_FRAME_EVENT,
+	CAM_SENSOR_CMD_TYPE_SYNC_CMD,
+	CAM_SENSOR_CMD_TYPE_EVENT,
+	CAM_SENSOR_CMD_TYPE_INVALID,
+};
+
+struct cam_sensor_cmd_sequence {
+	enum cam_sensor_cmd_buffer_type cmd_type;
+	uint32_t cmd_flag;
+	int32_t index;
+	void *payload;
+};
+
+struct cam_sensor_event_arg_sequence {
+	enum cam_sensor_cmd_buffer_type cmd_type;
+	int32_t index;
+	void *payload;
+};
+
+struct cam_sensor_trigger_event_info {
+	uint32_t event;
+	uint32_t event_flag;
+	uint32_t event_arg_count;
+	struct cam_sensor_event_arg_sequence event_arg_sequence[MAX_CMD_BUFFER];
+	uint32_t cmd_count;
+	struct cam_sensor_cmd_sequence cmd_sequence[MAX_CMD_BUFFER];
+};
+
+struct cam_sensor_cci_event_setting {
+	uint32_t event_count;
+	uint32_t context_id;
+	struct cam_sensor_trigger_event_info *trigger_info;
+};
+
+struct cam_sensor_event_list {
+	uint32_t event_count;
+	struct cam_sensor_trigger_event_info event_info[CAMERA_SENSOR_EVENT_MAX];
 };
 
 struct i2c_settings_list {
 	struct cam_sensor_i2c_reg_setting i2c_settings;
-	struct cam_sensor_i2c_slave_info slave_info;
+	struct cam_sensor_i2c_seq_reg seq_settings;
 	enum cam_sensor_i2c_cmd_type op_code;
 	struct list_head list;
 };
@@ -296,6 +310,27 @@ struct i2c_settings_array {
 	struct list_head list_head;
 	int32_t is_settings_valid;
 	int64_t request_id;
+	int64_t setting_id;
+};
+
+struct cam_sensor_per_frame_event_data {
+	enum cam_sensor_cmd_buffer_type cmd_type;
+	union {
+		int64_t  timestamp;
+		uint64_t wait_time_us;
+		uint32_t is_sync_cmd_enable;
+		struct   cam_sensor_frame_event_data frame_event_info;
+		struct   cam_sensor_fsin_data fsin_info;
+		struct   i2c_settings_array i2c_settings;
+	} trigger_sensor_cmd_buf_info;
+};
+
+struct cci_trigger_cam_setting_array {
+	int32_t is_settings_valid;
+	int64_t request_id;
+	int64_t setting_id;
+	struct cam_sensor_per_frame_event_data event_data[MAX_CMD_BUFFER];
+	struct cam_sensor_event_list event_list;
 };
 
 struct i2c_data_settings {
@@ -303,7 +338,10 @@ struct i2c_data_settings {
 	struct i2c_settings_array config_settings;
 	struct i2c_settings_array streamon_settings;
 	struct i2c_settings_array streamoff_settings;
+	struct i2c_settings_array read_settings;
 	struct i2c_settings_array *per_frame;
+	struct cci_trigger_cam_setting_array *per_frame_event_settings;
+	struct i2c_settings_array *frame_skip;
 };
 
 struct cam_sensor_power_ctrl_t {
@@ -322,7 +360,6 @@ struct cam_camera_slave_info {
 	uint16_t sensor_id_reg_addr;
 	uint16_t sensor_id;
 	uint16_t sensor_id_mask;
-	uint8_t  i2c_freq_mode;
 };
 
 struct msm_sensor_init_params {
@@ -338,6 +375,26 @@ enum msm_sensor_camera_id_t {
 	CAMERA_4,
 	CAMERA_5,
 	CAMERA_6,
+	CAMERA_7,
+	CAMERA_8,
+	CAMERA_9,
+	CAMERA_10,
+	CAMERA_11,
+	CAMERA_12,
+	CAMERA_13,
+	CAMERA_14,
+	CAMERA_15,
+	CAMERA_16,
+	CAMERA_17,
+	CAMERA_18,
+	CAMERA_19,
+	CAMERA_20,
+	CAMERA_21,
+	CAMERA_22,
+	CAMERA_23,
+	CAMERA_24,
+	CAMERA_25,
+	CAMERA_26,
 	MAX_CAMERAS,
 };
 

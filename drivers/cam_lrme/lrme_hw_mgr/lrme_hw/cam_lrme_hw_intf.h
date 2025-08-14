@@ -1,13 +1,6 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  */
 
 #ifndef _CAM_LRME_HW_INTF_H_
@@ -105,7 +98,7 @@ struct cam_lrme_frame_request {
 	struct cam_lrme_device    *hw_device;
 	struct cam_hw_update_entry hw_update_entries[CAM_LRME_MAX_HW_ENTRIES];
 	uint32_t                   num_hw_update_entries;
-	struct timeval             submit_timestamp;
+	ktime_t                    submit_timestamp;
 };
 
 /**
@@ -185,9 +178,9 @@ struct cam_lrme_hw_cb_args {
  * @data               : Data sent along with callback function
  */
 struct cam_lrme_hw_cmd_set_cb {
-	 int (*cam_lrme_hw_mgr_cb)(void *data,
+	int (*cam_lrme_hw_mgr_cb)(void *data,
 		struct cam_lrme_hw_cb_args *args);
-	 void *data;
+	void *data;
 };
 
 /**
@@ -198,24 +191,36 @@ struct cam_lrme_hw_cmd_set_cb {
  * @frame_req             : Pointer to the frame request
  */
 struct cam_lrme_hw_submit_args {
-	 struct cam_hw_update_entry    *hw_update_entries;
-	 uint32_t            num_hw_update_entries;
-	 struct cam_lrme_frame_request *frame_req;
+	struct cam_hw_update_entry    *hw_update_entries;
+	uint32_t            num_hw_update_entries;
+	struct cam_lrme_frame_request *frame_req;
 };
 
 /**
  * struct cam_lrme_hw_dump_args : Args for dump request
  *
+ * @request_id   : Issue request id
  * @cpu_addr     : start address of the target buffer
  * @offset       : offset of the buffer
- * @request_id   : Issue request id
  * @buf_len      : Length of target buffer
  */
 struct cam_lrme_hw_dump_args {
-	uintptr_t cpu_addr;
-	uint64_t  offset;
 	uint64_t  request_id;
+	uintptr_t cpu_addr;
+	size_t    offset;
 	size_t    buf_len;
 };
 
+/**
+ * @brief : API to register LRME hw to platform framework.
+ * @return struct platform_device pointer on on success, or ERR_PTR() on error.
+ */
+int cam_lrme_hw_init_module(void);
+
+/**
+ * @brief : API to remove LRME Hw from platform framework.
+ */
+void cam_lrme_hw_exit_module(void);
+
 #endif /* _CAM_LRME_HW_INTF_H_ */
+

@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/device.h>
@@ -27,38 +21,45 @@ int cam_lrme_soc_enable_resources(struct cam_hw_info *lrme_hw)
 	struct cam_lrme_soc_private *soc_private =
 		(struct cam_lrme_soc_private *)soc_info->soc_private;
 	struct cam_ahb_vote ahb_vote;
-	struct cam_axi_vote axi_vote;
+	struct cam_axi_vote axi_vote = {0};
 	int rc = 0;
 
-	rc = cam_soc_util_enable_platform_resource(soc_info, true,
-			CAM_SVS_VOTE, true);
-	if (rc) {
-		CAM_ERR(CAM_LRME,
-			"Failed to enable platform resource, rc %d", rc);
-		goto end;
-	}
-
 	ahb_vote.type = CAM_VOTE_ABSOLUTE;
-	ahb_vote.vote.level = CAM_SVS_VOTE;
-	axi_vote.compressed_bw = 7200000;
-	axi_vote.compressed_bw_ab = 7200000;
-	axi_vote.uncompressed_bw = 7200000;
+	ahb_vote.vote.level = CAM_LOWSVS_D1_VOTE;
+	axi_vote.num_paths = 2;
+	axi_vote.axi_path[0].path_data_type = CAM_AXI_PATH_DATA_ALL;
+	axi_vote.axi_path[0].transac_type = CAM_AXI_TRANSACTION_READ;
+	axi_vote.axi_path[0].camnoc_bw = 7200000;
+	axi_vote.axi_path[0].mnoc_ab_bw = 7200000;
+	axi_vote.axi_path[0].mnoc_ib_bw = 7200000;
+	axi_vote.axi_path[1].path_data_type = CAM_AXI_PATH_DATA_ALL;
+	axi_vote.axi_path[1].transac_type = CAM_AXI_TRANSACTION_WRITE;
+	axi_vote.axi_path[1].camnoc_bw = 7200000;
+	axi_vote.axi_path[1].mnoc_ab_bw = 7200000;
+	axi_vote.axi_path[1].mnoc_ib_bw = 7200000;
+
 	rc = cam_cpas_start(soc_private->cpas_handle, &ahb_vote, &axi_vote);
 	if (rc) {
 		CAM_ERR(CAM_LRME, "Failed to start cpas, rc %d", rc);
-		rc = -EFAULT;
-		goto disable_platform_resource;
+		return -EFAULT;
+	}
+
+	rc = cam_soc_util_enable_platform_resource(soc_info, true, soc_info->lowest_clk_level,
+		true);
+	if (rc) {
+		CAM_ERR(CAM_LRME,
+			"Failed to enable platform resource, rc %d", rc);
+		goto stop_cpas;
 	}
 
 	cam_lrme_set_irq(lrme_hw, CAM_LRME_IRQ_ENABLE);
 
 	return rc;
 
-disable_platform_resource:
-	if (cam_soc_util_disable_platform_resource(soc_info, true, true))
-		CAM_ERR(CAM_LRME, "Disable platform resource failed");
+stop_cpas:
+	if (cam_cpas_stop(soc_private->cpas_handle))
+		CAM_ERR(CAM_LRME, "Failed to stop cpas");
 
-end:
 	return rc;
 }
 

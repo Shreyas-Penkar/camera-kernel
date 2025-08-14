@@ -1,13 +1,6 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/of.h>
@@ -22,12 +15,13 @@
 int32_t cam_actuator_parse_dt(struct cam_actuator_ctrl_t *a_ctrl,
 	struct device *dev)
 {
-	int32_t                         rc = 0;
+	int32_t                         i, rc = 0;
 	struct cam_hw_soc_info          *soc_info = &a_ctrl->soc_info;
 	struct cam_actuator_soc_private *soc_private =
 		(struct cam_actuator_soc_private *)a_ctrl->soc_info.soc_private;
 	struct cam_sensor_power_ctrl_t  *power_info = &soc_private->power_info;
 	struct device_node              *of_node = NULL;
+	struct device_node              *of_parent = NULL;
 
 	/* Initialize mutex */
 	mutex_init(&(a_ctrl->actuator_mutex));
@@ -53,26 +47,37 @@ int32_t cam_actuator_parse_dt(struct cam_actuator_ctrl_t *a_ctrl,
 			return rc;
 		}
 
-		rc = of_property_read_u32(of_node, "cci-device",
-			&a_ctrl->cci_num);
-		CAM_DBG(CAM_ACTUATOR, "cci-device %d, rc %d",
-			a_ctrl->cci_num, rc);
-		if (rc < 0) {
+		of_parent = of_get_parent(of_node);
+		if (of_property_read_u32(of_parent, "cell-index",
+				&a_ctrl->cci_num) < 0)
 			/* Set default master 0 */
 			a_ctrl->cci_num = CCI_DEVICE_0;
-			rc = 0;
-		}
 		a_ctrl->io_master_info.cci_client->cci_device = a_ctrl->cci_num;
+		CAM_DBG(CAM_ACTUATOR, "cci-device %d", a_ctrl->cci_num);
 	}
 
+	/* Initialize regulators to default parameters */
+	for (i = 0; i < soc_info->num_rgltr; i++) {
+		soc_info->rgltr[i] = devm_regulator_get(soc_info->dev,
+					soc_info->rgltr_name[i]);
+		if (IS_ERR_OR_NULL(soc_info->rgltr[i])) {
+			rc = PTR_ERR(soc_info->rgltr[i]);
+			rc = rc ? rc : -EINVAL;
+			CAM_ERR(CAM_ACTUATOR, "get failed for regulator %s %d",
+				 soc_info->rgltr_name[i], rc);
+			return rc;
+		}
+		CAM_DBG(CAM_ACTUATOR, "get for regulator %s",
+			soc_info->rgltr_name[i]);
+	}
 	if (!soc_info->gpio_data) {
-		CAM_INFO(CAM_ACTUATOR, "No GPIO found");
+		CAM_DBG(CAM_ACTUATOR, "No GPIO found");
 		rc = 0;
 		return rc;
 	}
 
 	if (!soc_info->gpio_data->cam_gpio_common_tbl_size) {
-		CAM_INFO(CAM_ACTUATOR, "No GPIO found");
+		CAM_DBG(CAM_ACTUATOR, "No GPIO found");
 		return -EINVAL;
 	}
 

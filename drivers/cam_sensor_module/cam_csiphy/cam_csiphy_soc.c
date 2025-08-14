@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include "cam_csiphy_soc.h"
@@ -15,53 +9,74 @@
 #include "include/cam_csiphy_1_1_hwreg.h"
 #include "include/cam_csiphy_1_0_hwreg.h"
 #include "include/cam_csiphy_1_2_hwreg.h"
+#include "include/cam_csiphy_1_2_1_hwreg.h"
+#include "include/cam_csiphy_1_2_2_hwreg.h"
+#include "include/cam_csiphy_1_2_3_hwreg.h"
+#include "include/cam_csiphy_1_2_5_hwreg.h"
+#include "include/cam_csiphy_1_2_6_hwreg.h"
 #include "include/cam_csiphy_2_0_hwreg.h"
+#include "include/cam_csiphy_2_1_0_hwreg.h"
+#include "include/cam_csiphy_2_1_1_hwreg.h"
+#include "include/cam_csiphy_2_1_3_hwreg.h"
+#include "include/cam_csiphy_2_2_0_hwreg.h"
 
-#define CSIPHY_3PH_DIVISOR           16
-#define CSIPHY_3PH_DIVISOR_12        32
-#define CSIPHY_2PH_DIVISOR           8
-#define BYTES_PER_REGISTER           4
-#define NUM_REGISTER_PER_LINE        4
-#define REG_OFFSET(__start, __i)    ((__start) + ((__i) * BYTES_PER_REGISTER))
+/* Clock divide factor for CPHY spec v1.0 */
+#define CSIPHY_DIVISOR_16                    16
+/* Clock divide factor for CPHY spec v1.2 and up */
+#define CSIPHY_DIVISOR_32                    32
+/* Clock divide factor for DPHY */
+#define CSIPHY_DIVISOR_8                     8
+#define CSIPHY_LOG_BUFFER_SIZE_IN_BYTES      250
+#define ONE_LOG_LINE_MAX_SIZE                20
 
-static int cam_io_phy_dump(void __iomem *base_addr,
-	uint32_t start_offset, int size)
+static int cam_csiphy_io_dump(void __iomem *base_addr, uint16_t num_regs, int csiphy_idx)
 {
-	char          line_str[128];
-	char         *p_str;
-	int           i;
-	uint32_t      data;
+	char                                    *buffer;
+	uint8_t                                  buffer_offset = 0;
+	uint8_t                                  rem_buffer_size = CSIPHY_LOG_BUFFER_SIZE_IN_BYTES;
+	uint16_t                                 i;
+	uint32_t                                 reg_offset;
 
-	CAM_INFO(CAM_CSIPHY, "addr=%pK offset=0x%x size=%d",
-		base_addr, start_offset, size);
-
-	if (!base_addr || (size <= 0))
+	if (!base_addr || !num_regs) {
+		CAM_ERR(CAM_CSIPHY, "Invalid params. base_addr: 0x%p num_regs: %u",
+			base_addr, num_regs);
 		return -EINVAL;
+	}
 
-	line_str[0] = '\0';
-	p_str = line_str;
-	for (i = 0; i < size; i++) {
-		if (i % NUM_REGISTER_PER_LINE == 0) {
-			snprintf(p_str, 12, "0x%08x: ",
-				REG_OFFSET(start_offset, i));
-			p_str += 11;
-		}
-		data = readl_relaxed(base_addr + REG_OFFSET(start_offset, i));
-		snprintf(p_str, 9, "%08x ", data);
-		p_str += 8;
-		if ((i + 1) % NUM_REGISTER_PER_LINE == 0) {
-			CAM_ERR(CAM_CSIPHY, "%s", line_str);
-			line_str[0] = '\0';
-			p_str = line_str;
+	buffer = kzalloc(CSIPHY_LOG_BUFFER_SIZE_IN_BYTES, GFP_KERNEL);
+	if (!buffer) {
+		CAM_ERR(CAM_CSIPHY, "Could not allocate the memory for buffer");
+		return -ENOMEM;
+	}
+
+	CAM_INFO(CAM_CSIPHY, "Base: 0x%pK num_regs: %u", base_addr, num_regs);
+	CAM_INFO(CAM_CSIPHY, "CSIPHY:%d Dump", csiphy_idx);
+	for (i = 0; i < num_regs; i++) {
+		reg_offset = i << 2;
+		buffer_offset += scnprintf(buffer + buffer_offset, rem_buffer_size, "0x%x=0x%x\n",
+			reg_offset, cam_io_r_mb(base_addr + reg_offset));
+
+		rem_buffer_size = CSIPHY_LOG_BUFFER_SIZE_IN_BYTES - buffer_offset;
+
+		if (rem_buffer_size <= ONE_LOG_LINE_MAX_SIZE) {
+			buffer[buffer_offset - 1] = '\0';
+			pr_info("%s\n", buffer);
+			buffer_offset = 0;
+			rem_buffer_size = CSIPHY_LOG_BUFFER_SIZE_IN_BYTES;
 		}
 	}
-	if (line_str[0] != '\0')
-		CAM_ERR(CAM_CSIPHY, "%s", line_str);
+
+	if (buffer_offset) {
+		buffer[buffer_offset - 1] = '\0';
+		pr_info("%s\n", buffer);
+	}
+
+	kfree(buffer);
 
 	return 0;
 }
 
-int32_t cam_csiphy_mem_dmp(struct cam_hw_soc_info *soc_info)
+int32_t cam_csiphy_reg_dump(struct cam_hw_soc_info *soc_info)
 {
 	int32_t rc = 0;
 	resource_size_t size = 0;
@@ -74,7 +89,7 @@ int32_t cam_csiphy_mem_dmp(struct cam_hw_soc_info *soc_info)
 	}
 	addr = soc_info->reg_map[0].mem_base;
 	size = resource_size(soc_info->mem_block[0]);
-	rc = cam_io_phy_dump(addr, 0, (size >> 2));
+	rc = cam_csiphy_io_dump(addr, (size >> 2), soc_info->index);
 	if (rc < 0) {
 		CAM_ERR(CAM_CSIPHY, "generating dump failed %d", rc);
 		return rc;
@@ -82,49 +97,92 @@ int32_t cam_csiphy_mem_dmp(struct cam_hw_soc_info *soc_info)
 	return rc;
 }
 
-enum cam_vote_level get_clk_vote_default(struct csiphy_device *csiphy_dev)
+int32_t cam_csiphy_common_status_reg_dump(struct csiphy_device *csiphy_dev)
 {
-	CAM_DBG(CAM_CSIPHY, "voting for SVS");
-	return CAM_SVS_VOTE;
+	struct csiphy_reg_parms_t *csiphy_reg = NULL;
+	int32_t                    rc = 0;
+	resource_size_t            size = 0;
+	void __iomem              *phy_base = NULL;
+	int                        reg_id = 0;
+	uint32_t                   val, status_reg, clear_reg;
+
+	if (!csiphy_dev) {
+		rc = -EINVAL;
+		CAM_ERR(CAM_CSIPHY, "invalid input %d", rc);
+		return rc;
+	}
+
+	csiphy_reg = &csiphy_dev->ctrl_reg->csiphy_reg;
+	phy_base = csiphy_dev->soc_info.reg_map[0].mem_base;
+	status_reg = csiphy_reg->mipi_csiphy_interrupt_status0_addr;
+	clear_reg = csiphy_reg->mipi_csiphy_interrupt_clear0_addr;
+	size = csiphy_reg->csiphy_num_common_status_regs;
+
+	CAM_INFO(CAM_CSIPHY, "PHY base addr=%pK offset=0x%x size=%d",
+		phy_base, status_reg, size);
+
+	if (phy_base != NULL) {
+		for (reg_id = 0; reg_id < size; reg_id++) {
+			val = cam_io_r(phy_base + status_reg + (0x4 * reg_id));
+
+			if (reg_id < csiphy_reg->csiphy_interrupt_status_size)
+				cam_io_w_mb(val, phy_base + clear_reg + (0x4 * reg_id));
+
+			CAM_INFO(CAM_CSIPHY, "CSIPHY%d_COMMON_STATUS%u = 0x%x",
+				csiphy_dev->soc_info.index, reg_id, val);
+		}
+	} else {
+		rc = -EINVAL;
+		CAM_ERR(CAM_CSIPHY, "phy base is NULL  %d", rc);
+		return rc;
+	}
+	return rc;
 }
 
-enum cam_vote_level get_clk_voting_dynamic(struct csiphy_device *csiphy_dev)
+enum cam_vote_level get_clk_vote_default(struct csiphy_device *csiphy_dev,
+	int32_t index)
+{
+	CAM_DBG(CAM_CSIPHY, "voting for SVS");
+	return CAM_LOWSVS_D1_VOTE;
+}
+
+enum cam_vote_level get_clk_voting_dynamic(
+	struct csiphy_device *csiphy_dev, int32_t index)
 {
 	uint32_t cam_vote_level = 0;
 	uint32_t last_valid_vote = 0;
 	struct cam_hw_soc_info *soc_info;
-	uint64_t phy_data_rate = csiphy_dev->csiphy_info.data_rate;
+	uint64_t phy_data_rate = csiphy_dev->csiphy_info[index].data_rate;
 
 	soc_info = &csiphy_dev->soc_info;
+	phy_data_rate = max(phy_data_rate, csiphy_dev->current_data_rate);
 
-	if (csiphy_dev->is_acquired_dev_combo_mode)
-		phy_data_rate = max(phy_data_rate,
-			csiphy_dev->csiphy_info.data_rate_combo_sensor);
-
-	if (csiphy_dev->csiphy_info.csiphy_3phase) {
-		if (csiphy_dev->is_csiphy_3phase_hw == CSI_3PHASE_HW_12)
-			do_div(phy_data_rate, CSIPHY_3PH_DIVISOR_12);
+	if (csiphy_dev->csiphy_info[index].csiphy_3phase) {
+		if (csiphy_dev->is_divisor_32_comp)
+			do_div(phy_data_rate, CSIPHY_DIVISOR_32);
 		else
-			do_div(phy_data_rate, CSIPHY_3PH_DIVISOR);
+			do_div(phy_data_rate, CSIPHY_DIVISOR_16);
 	} else {
-		do_div(phy_data_rate, CSIPHY_2PH_DIVISOR);
+		do_div(phy_data_rate, CSIPHY_DIVISOR_8);
 	}
 
 	 /* round off to next integer */
 	phy_data_rate += 1;
+	csiphy_dev->current_data_rate = phy_data_rate;
 
 	for (cam_vote_level = 0;
 			cam_vote_level < CAM_MAX_VOTE; cam_vote_level++) {
 		if (soc_info->clk_level_valid[cam_vote_level] != true)
 			continue;
 
-		if (soc_info->clk_rate[cam_vote_level][0] >
-				phy_data_rate) {
+		if (soc_info->clk_rate[cam_vote_level]
+			[csiphy_dev->rx_clk_src_idx] > phy_data_rate) {
 			CAM_DBG(CAM_CSIPHY,
 				"match detected %s : %llu:%d level : %d",
-				soc_info->clk_name[0],
+				soc_info->clk_name[csiphy_dev->rx_clk_src_idx],
 				phy_data_rate,
-				soc_info->clk_rate[cam_vote_level][0],
+				soc_info->clk_rate[cam_vote_level]
+				[csiphy_dev->rx_clk_src_idx],
 				cam_vote_level);
 			return cam_vote_level;
 		}
@@ -133,11 +191,11 @@ enum cam_vote_level get_clk_voting_dynamic(struct csiphy_device *csiphy_dev)
 	return last_valid_vote;
 }
 
-int32_t cam_csiphy_enable_hw(struct csiphy_device *csiphy_dev)
+int32_t cam_csiphy_enable_hw(struct csiphy_device *csiphy_dev, int32_t index)
 {
 	int32_t rc = 0;
 	struct cam_hw_soc_info   *soc_info;
-	enum cam_vote_level vote_level = CAM_SVS_VOTE;
+	enum cam_vote_level vote_level = CAM_LOWSVS_D1_VOTE;
 
 	soc_info = &csiphy_dev->soc_info;
 
@@ -147,9 +205,9 @@ int32_t cam_csiphy_enable_hw(struct csiphy_device *csiphy_dev)
 		return rc;
 	}
 
-	vote_level = csiphy_dev->ctrl_reg->getclockvoting(csiphy_dev);
+	vote_level = csiphy_dev->ctrl_reg->getclockvoting(csiphy_dev, index);
 	rc = cam_soc_util_enable_platform_resource(soc_info, true,
-		vote_level, ENABLE_IRQ);
+		vote_level, true);
 	if (rc < 0) {
 		CAM_ERR(CAM_CSIPHY, "failed to enable platform resources %d",
 			rc);
@@ -203,11 +261,11 @@ int32_t cam_csiphy_parse_dt_info(struct platform_device *pdev,
 {
 	int32_t   rc = 0, i = 0;
 	uint32_t  clk_cnt = 0;
+	uint32_t   is_regulator_enable_sync;
 	char      *csi_3p_clk_name = "csi_phy_3p_clk";
 	char      *csi_3p_clk_src_name = "csiphy_3p_clk_src";
 	struct cam_hw_soc_info   *soc_info;
 
-	csiphy_dev->is_csiphy_3phase_hw = 0;
 	soc_info = &csiphy_dev->soc_info;
 
 	rc = cam_soc_util_get_dt_properties(soc_info);
@@ -216,100 +274,314 @@ int32_t cam_csiphy_parse_dt_info(struct platform_device *pdev,
 		return  rc;
 	}
 
-	csiphy_dev->is_csiphy_3phase_hw = 0;
+	rc = of_property_read_u32(soc_info->dev->of_node, "rgltr-enable-sync",
+		&is_regulator_enable_sync);
+	if (rc) {
+		rc = 0;
+		is_regulator_enable_sync = 0;
+	}
+
+	if (!of_property_read_bool(soc_info->dev->of_node, "aggregator-rx"))
+		csiphy_dev->is_aggregator_rx = false;
+	else
+		csiphy_dev->is_aggregator_rx = true;
+
+	if (!of_property_read_bool(soc_info->dev->of_node, "is_standard_channel"))
+		csiphy_dev->channel_type = CSIPHY_CHANNEL_TYPE_SHORT;
+	else
+		csiphy_dev->channel_type = CSIPHY_CHANNEL_TYPE_STANDARD;
+
+	if (!of_property_read_bool(soc_info->dev->of_node, "is_2ldphy_1lcphy_combo"))
+		csiphy_dev->dphy_cphy_combo_type = CSIPHY_2LCPHY_1LDPHY;
+	else
+		csiphy_dev->dphy_cphy_combo_type = CSIPHY_2LDPHY_1LCPHY;
+
+	if (of_property_read_bool(soc_info->dev->of_node, "is-phy-protect"))
+		csiphy_dev->is_phy_protect = true;
+	else
+		csiphy_dev->is_phy_protect = false;
+
+	csiphy_dev->prgm_cmn_reg_across_csiphy = (bool) is_regulator_enable_sync;
 
 	if (of_device_is_compatible(soc_info->dev->of_node,
 		"qcom,csiphy-v1.0")) {
 		csiphy_dev->ctrl_reg->csiphy_2ph_reg = csiphy_2ph_v1_0_reg;
-		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg =
-				csiphy_2ph_v1_0_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg = csiphy_2ph_v1_0_combo_mode_reg;
 		csiphy_dev->ctrl_reg->csiphy_3ph_reg = csiphy_3ph_v1_0_reg;
-		csiphy_dev->ctrl_reg->csiphy_2ph_3ph_mode_reg =
-				csiphy_3ph_v1_0_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_2l2ph_1l3ph_mode_reg = csiphy_3ph_v1_0_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_1l2ph_2l3ph_mode_reg = NULL;
 		csiphy_dev->ctrl_reg->csiphy_irq_reg = csiphy_irq_reg_1_0;
 		csiphy_dev->ctrl_reg->csiphy_common_reg = csiphy_common_reg_1_0;
-		csiphy_dev->ctrl_reg->csiphy_reset_reg = csiphy_reset_reg_1_0;
+		csiphy_dev->ctrl_reg->csiphy_reset_enter_regs = csiphy_reset_reg_1_0;
+		csiphy_dev->ctrl_reg->csiphy_reset_exit_regs = NULL;
 		csiphy_dev->ctrl_reg->csiphy_reg = csiphy_v1_0;
 		csiphy_dev->ctrl_reg->getclockvoting = get_clk_vote_default;
 		csiphy_dev->hw_version = CSIPHY_VERSION_V10;
-		csiphy_dev->is_csiphy_3phase_hw = CSI_3PHASE_HW;
+		csiphy_dev->is_divisor_32_comp = false;
 		csiphy_dev->clk_lane = 0;
 		csiphy_dev->ctrl_reg->data_rates_settings_table = NULL;
 	} else if (of_device_is_compatible(soc_info->dev->of_node,
 		"qcom,csiphy-v1.1")) {
 		csiphy_dev->ctrl_reg->csiphy_2ph_reg = csiphy_2ph_v1_1_reg;
-		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg =
-			csiphy_2ph_v1_1_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg = csiphy_2ph_v1_1_combo_mode_reg;
 		csiphy_dev->ctrl_reg->csiphy_3ph_reg = csiphy_3ph_v1_1_reg;
-		csiphy_dev->ctrl_reg->csiphy_2ph_3ph_mode_reg =
-			csiphy_3ph_v1_1_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_2l2ph_1l3ph_mode_reg = csiphy_3ph_v1_1_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_1l2ph_2l3ph_mode_reg = NULL;
 		csiphy_dev->ctrl_reg->csiphy_irq_reg = csiphy_irq_reg_1_1;
-		csiphy_dev->ctrl_reg->csiphy_common_reg =
-			csiphy_common_reg_1_1;
-		csiphy_dev->ctrl_reg->csiphy_reset_reg =
-			csiphy_reset_reg_1_1;
+		csiphy_dev->ctrl_reg->csiphy_common_reg = csiphy_common_reg_1_1;
+		csiphy_dev->ctrl_reg->csiphy_reset_enter_regs = csiphy_reset_reg_1_1;
+		csiphy_dev->ctrl_reg->csiphy_reset_exit_regs = NULL;
 		csiphy_dev->ctrl_reg->csiphy_reg = csiphy_v1_1;
 		csiphy_dev->ctrl_reg->getclockvoting = get_clk_vote_default;
-		csiphy_dev->is_csiphy_3phase_hw = CSI_3PHASE_HW;
+		csiphy_dev->is_divisor_32_comp = false;
 		csiphy_dev->hw_version = CSIPHY_VERSION_V11;
 		csiphy_dev->clk_lane = 0;
-		csiphy_dev->ctrl_reg->data_rates_settings_table =
-			&data_rate_delta_table_1_1;
+		csiphy_dev->ctrl_reg->data_rates_settings_table = NULL;
 	} else if (of_device_is_compatible(soc_info->dev->of_node,
 		"qcom,csiphy-v1.2")) {
 		csiphy_dev->ctrl_reg->csiphy_2ph_reg = csiphy_2ph_v1_2_reg;
-		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg =
-			csiphy_2ph_v1_2_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg = csiphy_2ph_v1_2_combo_mode_reg;
 		csiphy_dev->ctrl_reg->csiphy_3ph_reg = csiphy_3ph_v1_2_reg;
-		csiphy_dev->ctrl_reg->csiphy_2ph_3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_2l2ph_1l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_1l2ph_2l3ph_mode_reg = NULL;
 		csiphy_dev->ctrl_reg->csiphy_irq_reg = csiphy_irq_reg_1_2;
-		csiphy_dev->ctrl_reg->csiphy_common_reg =
-			csiphy_common_reg_1_2;
-		csiphy_dev->ctrl_reg->csiphy_reset_reg =
-			csiphy_reset_reg_1_2;
+		csiphy_dev->ctrl_reg->csiphy_common_reg = csiphy_common_reg_1_2;
+		csiphy_dev->ctrl_reg->csiphy_reset_enter_regs = csiphy_reset_reg_1_2;
+		csiphy_dev->ctrl_reg->csiphy_reset_exit_regs = NULL;
 		csiphy_dev->ctrl_reg->getclockvoting = get_clk_voting_dynamic;
 		csiphy_dev->ctrl_reg->csiphy_reg = csiphy_v1_2;
-		csiphy_dev->is_csiphy_3phase_hw = CSI_3PHASE_HW_12;
+		csiphy_dev->is_divisor_32_comp = true;
 		csiphy_dev->hw_version = CSIPHY_VERSION_V12;
 		csiphy_dev->clk_lane = 0;
-		csiphy_dev->ctrl_reg->data_rates_settings_table =
-			&data_rate_delta_table_1_2;
+		csiphy_dev->ctrl_reg->data_rates_settings_table = &data_rate_delta_table_1_2;
+	} else if (of_device_is_compatible(soc_info->dev->of_node,
+		"qcom,csiphy-v1.2.1")) {
+		csiphy_dev->ctrl_reg->csiphy_2ph_reg = csiphy_2ph_v1_2_1_reg;
+		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg = csiphy_2ph_v1_2_1_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_3ph_reg = csiphy_3ph_v1_2_1_reg;
+		csiphy_dev->ctrl_reg->csiphy_2l2ph_1l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_1l2ph_2l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_irq_reg = csiphy_irq_reg_1_2_1;
+		csiphy_dev->ctrl_reg->csiphy_common_reg = csiphy_common_reg_1_2_1;
+		csiphy_dev->ctrl_reg->csiphy_reset_enter_regs = csiphy_reset_reg_1_2_1;
+		csiphy_dev->ctrl_reg->csiphy_reset_exit_regs = NULL;
+		csiphy_dev->ctrl_reg->csiphy_reg = csiphy_v1_2_1;
+		csiphy_dev->ctrl_reg->getclockvoting = get_clk_voting_dynamic;
+		csiphy_dev->is_divisor_32_comp = true;
+		csiphy_dev->hw_version = CSIPHY_VERSION_V121;
+		csiphy_dev->clk_lane = 0;
+		csiphy_dev->ctrl_reg->data_rates_settings_table = &data_rate_delta_table_1_2_1;
 	} else if (of_device_is_compatible(soc_info->dev->of_node,
 		"qcom,csiphy-v1.2.2")) {
 		csiphy_dev->ctrl_reg->csiphy_2ph_reg = csiphy_2ph_v1_2_reg;
-		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg =
-			csiphy_2ph_v1_2_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg = csiphy_2ph_v1_2_combo_mode_reg;
 		csiphy_dev->ctrl_reg->csiphy_3ph_reg = csiphy_3ph_v1_2_reg;
-		csiphy_dev->ctrl_reg->csiphy_2ph_3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_2l2ph_1l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_1l2ph_2l3ph_mode_reg = NULL;
 		csiphy_dev->ctrl_reg->csiphy_irq_reg = csiphy_irq_reg_1_2;
-		csiphy_dev->ctrl_reg->csiphy_common_reg =
-			csiphy_common_reg_1_2;
-		csiphy_dev->ctrl_reg->csiphy_reset_reg =
-			csiphy_reset_reg_1_2;
-		csiphy_dev->ctrl_reg->getclockvoting = get_clk_voting_dynamic;
+		csiphy_dev->ctrl_reg->csiphy_common_reg = csiphy_common_reg_1_2;
+		csiphy_dev->ctrl_reg->csiphy_reset_enter_regs = csiphy_reset_reg_1_2;
+		csiphy_dev->ctrl_reg->csiphy_reset_exit_regs = NULL;
+		csiphy_dev->ctrl_reg->getclockvoting = get_clk_vote_default;
 		csiphy_dev->ctrl_reg->csiphy_reg = csiphy_v1_2;
-		csiphy_dev->is_csiphy_3phase_hw = CSI_3PHASE_HW_12;
+		csiphy_dev->is_divisor_32_comp = false;
 		csiphy_dev->hw_version = CSIPHY_VERSION_V12;
 		csiphy_dev->clk_lane = 0;
-		csiphy_dev->ctrl_reg->data_rates_settings_table =
-			&data_rate_delta_table_1_2;
+		csiphy_dev->ctrl_reg->data_rates_settings_table = &data_rate_delta_table_1_2;
+	} else if (of_device_is_compatible(soc_info->dev->of_node,
+		"qcom,csiphy-v1.2.2.2")) {
+		/* settings for lito v2 */
+		csiphy_dev->ctrl_reg->csiphy_2ph_reg = csiphy_2ph_v1_2_reg;
+		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg = csiphy_2ph_v1_2_2_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_3ph_reg = csiphy_3ph_v1_2_reg;
+		csiphy_dev->ctrl_reg->csiphy_2l2ph_1l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_1l2ph_2l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_irq_reg = csiphy_irq_reg_1_2;
+		csiphy_dev->ctrl_reg->csiphy_common_reg = csiphy_common_reg_1_2_2;
+		csiphy_dev->ctrl_reg->csiphy_reset_enter_regs = csiphy_reset_reg_1_2;
+		csiphy_dev->ctrl_reg->csiphy_reset_exit_regs = NULL;
+		csiphy_dev->ctrl_reg->getclockvoting = get_clk_vote_default;
+		csiphy_dev->ctrl_reg->csiphy_reg = csiphy_v1_2_2;
+		csiphy_dev->is_divisor_32_comp = false;
+		csiphy_dev->hw_version = CSIPHY_VERSION_V12;
+		csiphy_dev->clk_lane = 0;
+		csiphy_dev->ctrl_reg->data_rates_settings_table = &data_rate_delta_table_1_2;
+	} else if (of_device_is_compatible(soc_info->dev->of_node,
+		"qcom,csiphy-v1.2.3")) {
+		csiphy_dev->ctrl_reg->csiphy_2ph_reg = csiphy_2ph_v1_2_3_reg;
+		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg = csiphy_2ph_v1_2_3_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_3ph_reg = csiphy_3ph_v1_2_3_reg;
+		csiphy_dev->ctrl_reg->csiphy_1l2ph_2l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_2l2ph_1l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_irq_reg = csiphy_irq_reg_1_2_3;
+		csiphy_dev->ctrl_reg->csiphy_common_reg = csiphy_common_reg_1_2_3;
+		csiphy_dev->ctrl_reg->csiphy_reset_enter_regs = csiphy_reset_reg_1_2_3;
+		csiphy_dev->ctrl_reg->csiphy_reset_exit_regs = NULL;
+		csiphy_dev->ctrl_reg->getclockvoting = get_clk_voting_dynamic;
+		csiphy_dev->ctrl_reg->csiphy_reg = csiphy_v1_2_3;
+		csiphy_dev->is_divisor_32_comp = true;
+		csiphy_dev->hw_version = CSIPHY_VERSION_V123;
+		csiphy_dev->clk_lane = 0;
+		csiphy_dev->ctrl_reg->data_rates_settings_table = &data_rate_delta_table_1_2_3;
+	} else if (of_device_is_compatible(soc_info->dev->of_node,
+		"qcom,csiphy-v1.2.4")) {
+		csiphy_dev->ctrl_reg->csiphy_2ph_reg = csiphy_2ph_v1_2_3_reg;
+		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg = csiphy_2ph_v1_2_3_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_3ph_reg = csiphy_3ph_v1_2_3_reg;
+		csiphy_dev->ctrl_reg->csiphy_2l2ph_1l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_1l2ph_2l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_irq_reg = csiphy_irq_reg_1_2_3;
+		csiphy_dev->ctrl_reg->csiphy_common_reg = csiphy_common_reg_1_2_3;
+		csiphy_dev->ctrl_reg->csiphy_reset_enter_regs = csiphy_reset_reg_1_2_3;
+		csiphy_dev->ctrl_reg->csiphy_reset_exit_regs = NULL;
+		csiphy_dev->ctrl_reg->getclockvoting = get_clk_voting_dynamic;
+		csiphy_dev->ctrl_reg->csiphy_reg = csiphy_v1_2_3;
+		csiphy_dev->is_divisor_32_comp = true;
+		csiphy_dev->hw_version = CSIPHY_VERSION_V124;
+		csiphy_dev->clk_lane = 0;
+		csiphy_dev->ctrl_reg->data_rates_settings_table = &data_rate_delta_table_1_2_3;
+	}  else if (of_device_is_compatible(soc_info->dev->of_node,
+		"qcom,csiphy-v1.2.5")) {
+		csiphy_dev->ctrl_reg->csiphy_2ph_reg = csiphy_2ph_v1_2_5_reg;
+		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg = csiphy_2ph_v1_2_5_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_3ph_reg = csiphy_3ph_v1_2_5_reg;
+		csiphy_dev->ctrl_reg->csiphy_2l2ph_1l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_1l2ph_2l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_irq_reg = csiphy_irq_reg_1_2_5;
+		csiphy_dev->ctrl_reg->csiphy_common_reg = csiphy_common_reg_1_2_5;
+		csiphy_dev->ctrl_reg->csiphy_reset_enter_regs = csiphy_reset_reg_1_2_5;
+		csiphy_dev->ctrl_reg->csiphy_reset_exit_regs = NULL;
+		csiphy_dev->ctrl_reg->getclockvoting = get_clk_vote_default;
+		csiphy_dev->ctrl_reg->csiphy_reg = csiphy_v1_2_5;
+		csiphy_dev->is_divisor_32_comp = false;
+		csiphy_dev->hw_version = CSIPHY_VERSION_V125;
+		csiphy_dev->clk_lane = 0;
+		csiphy_dev->ctrl_reg->data_rates_settings_table = NULL;
+	}  else if (of_device_is_compatible(soc_info->dev->of_node,
+		"qcom,csiphy-v1.2.6")) {
+		csiphy_dev->ctrl_reg->csiphy_2ph_reg = csiphy_2ph_v1_2_6_reg;
+		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg = csiphy_2ph_v1_2_6_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_3ph_reg = csiphy_3ph_v1_2_6_reg;
+		csiphy_dev->ctrl_reg->csiphy_2l2ph_1l3ph_mode_reg = csiphy_2l2ph_1l3ph_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_1l2ph_2l3ph_mode_reg = csiphy_1l2ph_2l3ph_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_irq_reg = csiphy_irq_reg_1_2_6;
+		csiphy_dev->ctrl_reg->csiphy_common_reg = csiphy_common_reg_1_2_6;
+		csiphy_dev->ctrl_reg->csiphy_reset_enter_regs = csiphy_reset_enter_reg_1_2_6;
+		csiphy_dev->ctrl_reg->csiphy_reset_exit_regs = csiphy_reset_exit_reg_1_2_6;
+		csiphy_dev->ctrl_reg->getclockvoting = get_clk_vote_default;
+		csiphy_dev->ctrl_reg->csiphy_reg = csiphy_v1_2_6;
+		csiphy_dev->is_divisor_32_comp = true;
+		csiphy_dev->hw_version = CSIPHY_VERSION_V126;
+		csiphy_dev->clk_lane = 0;
+		csiphy_dev->ctrl_reg->data_rates_settings_table = &data_rate_delta_table_1_2_6;
 	} else if (of_device_is_compatible(soc_info->dev->of_node,
 		"qcom,csiphy-v2.0")) {
 		csiphy_dev->ctrl_reg->csiphy_2ph_reg = csiphy_2ph_v2_0_reg;
-		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg =
-			csiphy_2ph_v2_0_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg = csiphy_2ph_v2_0_combo_mode_reg;
 		csiphy_dev->ctrl_reg->csiphy_3ph_reg = csiphy_3ph_v2_0_reg;
-		csiphy_dev->ctrl_reg->csiphy_2ph_3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_2l2ph_1l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_1l2ph_2l3ph_mode_reg = NULL;
 		csiphy_dev->ctrl_reg->csiphy_irq_reg = csiphy_irq_reg_2_0;
 		csiphy_dev->ctrl_reg->csiphy_common_reg = csiphy_common_reg_2_0;
-		csiphy_dev->ctrl_reg->csiphy_reset_reg = csiphy_reset_reg_2_0;
+		csiphy_dev->ctrl_reg->csiphy_reset_enter_regs = csiphy_reset_reg_2_0;
+		csiphy_dev->ctrl_reg->csiphy_reset_exit_regs = NULL;
 		csiphy_dev->ctrl_reg->csiphy_reg = csiphy_v2_0;
 		csiphy_dev->ctrl_reg->getclockvoting = get_clk_vote_default;
 		csiphy_dev->hw_version = CSIPHY_VERSION_V20;
-		csiphy_dev->is_csiphy_3phase_hw = CSI_3PHASE_HW;
+		csiphy_dev->is_divisor_32_comp = false;
 		csiphy_dev->clk_lane = 0;
-		csiphy_dev->ctrl_reg->data_rates_settings_table =
-			&data_rate_delta_table_2_0;
+		csiphy_dev->ctrl_reg->data_rates_settings_table = NULL;
+	} else if (of_device_is_compatible(soc_info->dev->of_node,
+		"qcom,csiphy-v2.0.1")) {
+		csiphy_dev->ctrl_reg->csiphy_2ph_reg = csiphy_2ph_v2_0_reg;
+		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg = csiphy_2ph_v2_0_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_3ph_reg = csiphy_3ph_v2_0_reg;
+		csiphy_dev->ctrl_reg->csiphy_2l2ph_1l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_1l2ph_2l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_irq_reg = csiphy_irq_reg_2_0;
+		csiphy_dev->ctrl_reg->csiphy_common_reg = csiphy_common_reg_2_0;
+		csiphy_dev->ctrl_reg->csiphy_reset_enter_regs = csiphy_reset_reg_2_0;
+		csiphy_dev->ctrl_reg->csiphy_reset_exit_regs = NULL;
+		csiphy_dev->ctrl_reg->csiphy_reg = csiphy_v2_0;
+		csiphy_dev->ctrl_reg->getclockvoting = get_clk_vote_default;
+		csiphy_dev->hw_version = CSIPHY_VERSION_V201;
+		csiphy_dev->is_divisor_32_comp = false;
+		csiphy_dev->clk_lane = 0;
+		csiphy_dev->ctrl_reg->data_rates_settings_table = NULL;
+	} else if (of_device_is_compatible(soc_info->dev->of_node,
+		"qcom,csiphy-v2.1.0")) {
+		csiphy_dev->ctrl_reg->csiphy_2ph_reg = csiphy_2ph_v2_1_0_reg;
+		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg = csiphy_2ph_v2_1_0_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_3ph_reg = csiphy_3ph_v2_1_0_reg;
+		csiphy_dev->ctrl_reg->csiphy_2l2ph_1l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_1l2ph_2l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_irq_reg = csiphy_irq_reg_2_1_0;
+		csiphy_dev->ctrl_reg->csiphy_common_reg = csiphy_common_reg_2_1_0;
+		csiphy_dev->ctrl_reg->csiphy_reset_enter_regs = csiphy_reset_enter_reg_2_1_0;
+		csiphy_dev->ctrl_reg->csiphy_reset_exit_regs = csiphy_reset_exit_reg_2_1_0;
+		csiphy_dev->ctrl_reg->csiphy_reg = csiphy_v2_1_0;
+		csiphy_dev->ctrl_reg->getclockvoting = get_clk_voting_dynamic;
+		csiphy_dev->hw_version = CSIPHY_VERSION_V210;
+		csiphy_dev->is_divisor_32_comp = true;
+		csiphy_dev->clk_lane = 0;
+		csiphy_dev->ctrl_reg->data_rates_settings_table = &data_rate_delta_table_2_1_0;
+		csiphy_dev->ctrl_reg->csiphy_bist_reg = &bist_setting_2_1_0;
+	} else if (of_device_is_compatible(soc_info->dev->of_node,
+		"qcom,csiphy-v2.1.1")) {
+		csiphy_dev->ctrl_reg->csiphy_2ph_reg = csiphy_2ph_v2_1_1_reg;
+		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg = csiphy_2ph_v2_1_1_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_3ph_reg = csiphy_3ph_v2_1_1_reg;
+		csiphy_dev->ctrl_reg->csiphy_2l2ph_1l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_1l2ph_2l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_irq_reg = csiphy_irq_reg_2_1_1;
+		csiphy_dev->ctrl_reg->csiphy_common_reg = csiphy_common_reg_2_1_1;
+		csiphy_dev->ctrl_reg->csiphy_reset_enter_regs = csiphy_reset_enter_reg_2_1_1;
+		csiphy_dev->ctrl_reg->csiphy_reset_exit_regs = csiphy_reset_exit_reg_2_1_1;
+		csiphy_dev->ctrl_reg->csiphy_reg = csiphy_v2_1_1;
+		csiphy_dev->ctrl_reg->getclockvoting = get_clk_voting_dynamic;
+		csiphy_dev->hw_version = CSIPHY_VERSION_V211;
+		csiphy_dev->is_divisor_32_comp = true;
+		csiphy_dev->clk_lane = 0;
+		csiphy_dev->ctrl_reg->data_rates_settings_table = &data_rate_delta_table_2_1_1;
+		csiphy_dev->ctrl_reg->csiphy_bist_reg = &bist_setting_2_1_1;
+	} else if (of_device_is_compatible(soc_info->dev->of_node,
+		"qcom,csiphy-v2.1.3")) {
+		csiphy_dev->ctrl_reg->csiphy_2ph_reg = csiphy_2ph_v2_1_3_reg;
+		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg = csiphy_2ph_v2_1_3_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_3ph_reg = csiphy_3ph_v2_1_3_reg;
+		csiphy_dev->ctrl_reg->csiphy_2l2ph_1l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_1l2ph_2l3ph_mode_reg = NULL;
+		csiphy_dev->ctrl_reg->csiphy_irq_reg = csiphy_irq_reg_2_1_3;
+		csiphy_dev->ctrl_reg->csiphy_common_reg = csiphy_common_reg_2_1_3;
+		csiphy_dev->ctrl_reg->csiphy_reset_enter_regs = csiphy_reset_enter_reg_2_1_3;
+		csiphy_dev->ctrl_reg->csiphy_reset_exit_regs = csiphy_reset_exit_reg_2_1_3;
+		csiphy_dev->ctrl_reg->csiphy_reg = csiphy_v2_1_3;
+		csiphy_dev->ctrl_reg->getclockvoting = get_clk_voting_dynamic;
+		csiphy_dev->hw_version = CSIPHY_VERSION_V213;
+		csiphy_dev->is_divisor_32_comp = true;
+		csiphy_dev->clk_lane = 0;
+		csiphy_dev->ctrl_reg->data_rates_settings_table = &data_rate_delta_table_2_1_3;
+		csiphy_dev->ctrl_reg->csiphy_bist_reg = &bist_setting_2_1_3;
+	} else if (of_device_is_compatible(soc_info->dev->of_node,
+		"qcom,csiphy-v2.2.0")) {
+		csiphy_dev->ctrl_reg->csiphy_2ph_reg = csiphy_2ph_v2_2_0_reg;
+		csiphy_dev->ctrl_reg->csiphy_2ph_combo_mode_reg = csiphy_2ph_v2_2_0_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_3ph_reg = csiphy_3ph_v2_2_0_reg;
+		csiphy_dev->ctrl_reg->csiphy_2l2ph_1l3ph_mode_reg =
+			csiphy_v2_2_0_2l2ph_1l3ph_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_1l2ph_2l3ph_mode_reg =
+			csiphy_v2_2_0_1l2ph_2l3ph_combo_mode_reg;
+		csiphy_dev->ctrl_reg->csiphy_irq_reg = csiphy_irq_reg_2_2_0;
+		csiphy_dev->ctrl_reg->csiphy_common_reg = csiphy_common_reg_2_2_0;
+		csiphy_dev->ctrl_reg->csiphy_reset_enter_regs = csiphy_reset_enter_reg_2_2_0;
+		csiphy_dev->ctrl_reg->csiphy_reset_exit_regs = csiphy_reset_exit_reg_2_2_0;
+		csiphy_dev->ctrl_reg->csiphy_reg = csiphy_v2_2_0;
+		csiphy_dev->ctrl_reg->getclockvoting = get_clk_voting_dynamic;
+		csiphy_dev->hw_version = CSIPHY_VERSION_V220;
+		csiphy_dev->is_divisor_32_comp = true;
+		csiphy_dev->clk_lane = 0;
+		csiphy_dev->ctrl_reg->data_rates_settings_table = &data_rate_delta_table_2_2_0;
+		csiphy_dev->ctrl_reg->csiphy_bist_reg = &bist_setting_2_2_0;
 	} else {
 		CAM_ERR(CAM_CSIPHY, "invalid hw version : 0x%x",
 			csiphy_dev->hw_version);
@@ -340,6 +612,10 @@ int32_t cam_csiphy_parse_dt_info(struct platform_device *pdev,
 				soc_info->clk_rate[0][i];
 			csiphy_dev->csiphy_3p_clk[1] =
 				soc_info->clk[i];
+			continue;
+		} else if (!strcmp(soc_info->clk_name[i],
+				CAM_CSIPHY_RX_CLK_SRC)) {
+			csiphy_dev->rx_clk_src_idx = i;
 			continue;
 		}
 

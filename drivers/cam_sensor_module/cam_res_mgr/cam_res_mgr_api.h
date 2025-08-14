@@ -1,13 +1,6 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  */
 
 #ifndef __CAM_RES_MGR_API_H__
@@ -51,45 +44,18 @@ void cam_res_mgr_led_trigger_event(struct led_trigger *trig,
 	enum led_brightness brightness);
 
 /**
- * @brief: Get the corresponding pinctrl of dev
+ * @brief: Check for shared gpio
  *
- *  Init the shared pinctrl if shared pinctrl enabled.
+ *  Will check whether requested device shares the gpio with other
+ *  device. This function check against gpio table from device and
+ *  shared gpio resources has been defined at res-mgr level
  *
- * @return None
+ * @gpio_tbl  : The GPIO table for respective device
+ * @size      : GPIO table size
+ * @return Status of operation. False if not shared, true otherwise.
  */
-int cam_res_mgr_shared_pinctrl_init(void);
-
-/**
- * @brief: Put the pinctrl
- *
- *  Put the shared pinctrl.
- *
- * @return Status of operation. Negative in case of error. Zero otherwise.
- */
-void cam_res_mgr_shared_pinctrl_put(void);
-
-/**
- * @brief: Select the corresponding state
- *
- *  Active state can be selected directly, but need hold to suspend the
- *  pinctrl if the gpios in this pinctrl also held by other pinctrl.
- *
- * @active   : The flag to indicate whether active or suspend
- * the shared pinctrl.
- *
- * @return Status of operation. Negative in case of error. Zero otherwise.
- */
-int cam_res_mgr_shared_pinctrl_select_state(bool active);
-
-/**
- * @brief: Post init shared pinctrl
- *
- *  Post init to check if the device really has shared gpio,
- *  suspend and put the pinctrl if not use shared gpio.
- *
- * @return Status of operation. Negative in case of error. Zero otherwise.
- */
-int cam_res_mgr_shared_pinctrl_post_init(void);
+bool cam_res_mgr_util_check_if_gpio_is_shared(
+	struct gpio *gpio_tbl, uint8_t size);
 
 /**
  * @brief: Request a gpio
@@ -134,15 +100,36 @@ void cam_res_mgr_gpio_free_arry(struct device *dev,
  */
 int cam_res_mgr_gpio_set_value(unsigned int gpio, int value);
 
+
 /**
- * @brief: Config the shared clk ref count
- *
- *  Config the shared clk ref count..
- *
- * @value   : get or put the shared clk.
- *
- * @return None
+ * @brief : API to register RES_MGR to platform framework.
+ * @return struct platform_device pointer on on success, or ERR_PTR() on error.
  */
-void cam_res_mgr_shared_clk_config(bool value);
+int cam_res_mgr_init(void);
+
+/**
+ * @brief : API to remove RES_MGR from platform framework.
+ */
+void cam_res_mgr_exit(void);
+
+/**
+ * @brief : API to get gpio idx from shared gpio list.
+ * @return idx for Success and error if gpio not found or invalid.
+ */
+int cam_res_mgr_util_get_idx_from_shared_gpio(uint gpio);
+
+/**
+ * @brief : API to get gpio idx from shared pinctrl gpio list.
+ * @return idx for Success and error if gpio not found or invalid.
+ */
+int cam_res_mgr_util_get_idx_from_shared_pctrl_gpio(uint gpio);
+
+/**
+ * @brief : API to check whether gpio is in use or can be free.
+ * @return NEED_HOLD macro if gpio is in use CAN_FREE if gpio can be free,
+ *	error if operation is not valid, 0 in case of res_mgr is not
+ *	available.
+ */
+int cam_res_mgr_util_shared_gpio_check_hold(uint gpio);
 
 #endif /* __CAM_RES_MGR_API_H__ */

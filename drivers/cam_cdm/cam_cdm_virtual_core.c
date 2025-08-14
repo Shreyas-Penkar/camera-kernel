@@ -1,21 +1,13 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/module.h>
-#include <linux/ion.h>
-#include <linux/iommu.h>
 #include <linux/timer.h>
 #include <linux/kernel.h>
 
@@ -28,19 +20,22 @@
 #include "cam_cdm_core_common.h"
 #include "cam_cdm_soc.h"
 #include "cam_io_util.h"
+#include "cam_req_mgr_worker_wrapper.h"
+#include "cam_common_util.h"
 
 #define CAM_CDM_VIRTUAL_NAME "qcom,cam_virtual_cdm"
 
-static void cam_virtual_cdm_work(struct work_struct *work)
+static int cam_virtual_cdm_work(void *priv, void *data)
 {
 	struct cam_cdm_work_payload *payload;
 	struct cam_hw_info *cdm_hw;
 	struct cam_cdm *core;
 
-	payload = container_of(work, struct cam_cdm_work_payload, work);
+	payload = (struct cam_cdm_work_payload *) data;
 	if (payload) {
 		cdm_hw = payload->hw;
 		core = (struct cam_cdm *)cdm_hw->core_info;
+
 		if (payload->irq_status & 0x2) {
 			struct cam_cdm_bl_cb_request_entry *node;
 
@@ -74,7 +69,7 @@ static void cam_virtual_cdm_work(struct work_struct *work)
 		}
 		kfree(payload);
 	}
-
+	return 0;
 }
 
 int cam_virtual_cdm_submit_bl(struct cam_hw_info *cdm_hw,
@@ -84,6 +79,7 @@ int cam_virtual_cdm_submit_bl(struct cam_hw_info *cdm_hw,
 	int i, rc = -EINVAL;
 	struct cam_cdm_bl_request *cdm_cmd = req->data;
 	struct cam_cdm *core = (struct cam_cdm *)cdm_hw->core_info;
+	struct crm_worker_task            *task = NULL;
 
 	mutex_lock(&client->lock);
 	for (i = 0; i < req->data->cmd_arrary_count ; i++) {
@@ -124,7 +120,7 @@ int cam_virtual_cdm_submit_bl(struct cam_hw_info *cdm_hw,
 				cdm_cmd->cmd[i].len) {
 				CAM_ERR(CAM_CDM, "Not enough buffer");
 				rc = -EINVAL;
-				break;
+				goto end;
 			}
 			CAM_DBG(CAM_CDM,
 				"hdl=%x vaddr=%pK offset=%d cmdlen=%d:%zu",
@@ -142,7 +138,7 @@ int cam_virtual_cdm_submit_bl(struct cam_hw_info *cdm_hw,
 					"write failed for cnt=%d:%d len %u",
 					i, req->data->cmd_arrary_count,
 					cdm_cmd->cmd[i].len);
-				break;
+				goto end;
 			}
 		} else {
 			CAM_ERR(CAM_CDM,
@@ -153,7 +149,7 @@ int cam_virtual_cdm_submit_bl(struct cam_hw_info *cdm_hw,
 				"Sanity check failed for cmd_count=%d cnt=%d",
 				i, req->data->cmd_arrary_count);
 			rc = -EINVAL;
-			break;
+			goto end;
 		}
 		if (!rc) {
 			struct cam_cdm_work_payload *payload;
@@ -161,8 +157,7 @@ int cam_virtual_cdm_submit_bl(struct cam_hw_info *cdm_hw,
 			CAM_DBG(CAM_CDM,
 				"write BL success for cnt=%d with tag=%d",
 				i, core->bl_tag);
-			if ((true == req->data->flag) &&
-				(i == req->data->cmd_arrary_count)) {
+			if (req->data->gen_irq_bl_done && (i == req->data->cmd_arrary_count)) {
 				struct cam_cdm_bl_cb_request_entry *node;
 
 				node = kzalloc(sizeof(
@@ -170,7 +165,7 @@ int cam_virtual_cdm_submit_bl(struct cam_hw_info *cdm_hw,
 					GFP_KERNEL);
 				if (!node) {
 					rc = -ENOMEM;
-					break;
+					goto end;
 				}
 				node->request_type = CAM_HW_CDM_BL_CB_CLIENT;
 				node->client_hdl = req->handle;
@@ -189,12 +184,20 @@ int cam_virtual_cdm_submit_bl(struct cam_hw_info *cdm_hw,
 					payload->irq_status = 0x2;
 					payload->irq_data = core->bl_tag;
 					payload->hw = cdm_hw;
-					INIT_WORK((struct work_struct *)
-						&payload->work,
-						cam_virtual_cdm_work);
-					queue_work(core->work_queue,
-						&payload->work);
+					task = cam_req_mgr_worker_get_task(core->worker);
+					if (IS_ERR_OR_NULL(task)) {
+						CAM_ERR(CAM_CDM, "no empty task = %d",
+							PTR_ERR(task));
+						kfree(payload);
+						rc = -ENOMEM;
+						goto end;
+					} else {
+						task->payload = payload;
+						task->process_cb = cam_virtual_cdm_work;
+						cam_req_mgr_worker_enqueue_task(task, NULL,
+							CRM_TASK_PRIORITY_0);
 					}
+				}
 			}
 			core->bl_tag++;
 			CAM_DBG(CAM_CDM,
@@ -202,9 +205,20 @@ int cam_virtual_cdm_submit_bl(struct cam_hw_info *cdm_hw,
 			if (!rc && (core->bl_tag == 63))
 				core->bl_tag = 0;
 		}
+
+		if (req->data->type == CAM_CDM_BL_CMD_TYPE_MEM_HANDLE)
+			cam_mem_put_cpu_buf(cdm_cmd->cmd[i].bl_addr.mem_handle);
 	}
 	mutex_unlock(&client->lock);
 	return rc;
+
+end:
+	if (req->data->type == CAM_CDM_BL_CMD_TYPE_MEM_HANDLE)
+		cam_mem_put_cpu_buf(cdm_cmd->cmd[i].bl_addr.mem_handle);
+
+	mutex_unlock(&client->lock);
+	return rc;
+
 }
 
 int cam_virtual_cdm_probe(struct platform_device *pdev)
@@ -286,9 +300,9 @@ int cam_virtual_cdm_probe(struct platform_device *pdev)
 	cdm_core->id = CAM_CDM_VIRTUAL;
 	memcpy(cdm_core->name, CAM_CDM_VIRTUAL_NAME,
 		sizeof(CAM_CDM_VIRTUAL_NAME));
-	cdm_core->work_queue = alloc_workqueue(cdm_core->name,
-		WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_SYSFS,
-		CAM_CDM_INFLIGHT_WORKS);
+	cam_req_mgr_worker_create("cdm_worker", CAM_CDM_INFLIGHT_WORKS,
+		&cdm_core->worker, CRM_WORKER_USAGE_NON_IRQ,
+		0);
 	cdm_core->ops = NULL;
 
 	cpas_parms.cam_cpas_client_cb = cam_cdm_cpas_cb;
@@ -323,8 +337,8 @@ intf_registration_failed:
 	cam_cpas_unregister_client(cdm_core->cpas_handle);
 cpas_registration_failed:
 	kfree(cdm_hw->soc_info.soc_private);
-	flush_workqueue(cdm_core->work_queue);
-	destroy_workqueue(cdm_core->work_queue);
+	cam_req_mgr_worker_flush(cdm_core->worker);
+	cam_req_mgr_worker_destroy(&cdm_core->worker);
 	mutex_unlock(&cdm_hw->hw_mutex);
 	mutex_destroy(&cdm_hw->hw_mutex);
 soc_load_failed:
@@ -378,8 +392,8 @@ int cam_virtual_cdm_remove(struct platform_device *pdev)
 		return rc;
 	}
 
-	flush_workqueue(cdm_core->work_queue);
-	destroy_workqueue(cdm_core->work_queue);
+	cam_req_mgr_worker_flush(cdm_core->worker);
+	cam_req_mgr_worker_destroy(&cdm_core->worker);
 	mutex_destroy(&cdm_hw->hw_mutex);
 	kfree(cdm_hw->soc_info.soc_private);
 	kfree(cdm_hw->core_info);

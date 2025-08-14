@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _CAM_VFE_SOC_H_
@@ -18,10 +12,24 @@
 
 #define CAM_VFE_DSP_CLK_NAME "ife_dsp_clk"
 
-enum cam_cpas_handle_id {
-	CAM_CPAS_HANDLE_CAMIF,
-	CAM_CPAS_HANDLE_RAW,
-	CAM_CPAS_HANDLE_MAX,
+#define UBWC_STATIC_CONFIG_MAX  2
+#define IPCC_INFO_CONFIG_MAX    3
+
+/*
+ * struct cam_vfe_soc_ipcc_info:
+ *
+ * @Brief:                   IPCC SOC data specific to IFE/TFE HW
+ *
+ * @ipcc_protocol_id:        IPCC protocol id (compute_l0/fence...)
+ * @ipcc_client_id:          IPCC client ID
+ * @ipcc_dest_client_id:     IPCC client ID of the destination core
+ * @ipcc_en:                 IPCC info provided
+ */
+struct cam_vfe_soc_ipcc_info {
+	uint32_t    ipcc_protocol_id;
+	uint32_t    ipcc_client_id;
+	uint32_t    ipcc_dest_client_id;
+	bool        ipcc_en;
 };
 
 /*
@@ -33,13 +41,30 @@ enum cam_cpas_handle_id {
  *                           This handle is used for all further interface
  *                           with CPAS.
  * @cpas_version:            Has cpas version read from Hardware
+ * @rt_wrapper_base:         Base address of the RT-Wrapper if the hw is in rt-wrapper
+ * @dsp_clk_index:           DSP clk index in optional clocks
+ * @ubwc_static_ctrl:        UBWC static control configuration
+ * @ife_clk_src:             IFE source clock
+ * @num_pid:                 Number of pids of ife
+ * @pid:                     IFE pid values list
+ * @group_id:                IFE lite hw group id based on power domain
+ * @is_grp_support:          Flag to indicate if ife lite hw grouping supported
+ * @ipcc_info:               Associated IPCC info if provided
+ * @is_ife_lite:             Flag to indicate full vs lite IFE
  */
 struct cam_vfe_soc_private {
-	uint32_t    cpas_handle[CAM_CPAS_HANDLE_MAX];
+	uint32_t    cpas_handle;
 	uint32_t    cpas_version;
-	struct clk *dsp_clk;
+	uint32_t    rt_wrapper_base;
 	int32_t     dsp_clk_index;
-	int32_t     dsp_clk_rate;
+	uint32_t    ubwc_static_ctrl[UBWC_STATIC_CONFIG_MAX];
+	uint64_t    ife_clk_src;
+	uint32_t    num_pid;
+	uint32_t    pid[CAM_ISP_HW_MAX_PID_VAL];
+	uint32_t    group_id;
+	bool        is_grp_support;
+	struct cam_vfe_soc_ipcc_info ipcc_info;
+	bool        is_ife_lite;
 };
 
 /*

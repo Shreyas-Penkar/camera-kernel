@@ -1,21 +1,12 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/module.h>
-#include <linux/ion.h>
-#include <linux/iommu.h>
 #include <linux/timer.h>
 #include <linux/kernel.h>
 
@@ -24,6 +15,8 @@
 #include "cam_cdm_virtual.h"
 #include "cam_soc_util.h"
 #include "cam_cdm_soc.h"
+#include "cam_cdm_core_common.h"
+#include "camera_main.h"
 
 static struct cam_cdm_intf_mgr cdm_mgr;
 static DEFINE_MUTEX(cam_cdm_mgr_lock);
@@ -86,13 +79,15 @@ static int get_cdm_index_by_id(char *identifier,
 	uint32_t cell_index, uint32_t *hw_index)
 {
 	int rc = -EPERM, i, j;
-	char client_name[128];
+	char client_name[128], name_index[160];
 
-	CAM_DBG(CAM_CDM, "Looking for HW id of =%s and index=%d",
-		identifier, cell_index);
 	snprintf(client_name, sizeof(client_name), "%s", identifier);
-	CAM_DBG(CAM_CDM, "Looking for HW id of %s count:%d", client_name,
-		cdm_mgr.cdm_count);
+	snprintf(name_index, sizeof(name_index), "%s%d",
+		identifier, cell_index);
+
+	CAM_DBG(CAM_CDM,
+		"Looking for HW id of =%s or %s and index=%d cdm_count %d",
+		identifier, name_index, cell_index, cdm_mgr.cdm_count);
 	mutex_lock(&cam_cdm_mgr_lock);
 	for (i = 0; i < cdm_mgr.cdm_count; i++) {
 		mutex_lock(&cdm_mgr.nodes[i].lock);
@@ -101,11 +96,14 @@ static int get_cdm_index_by_id(char *identifier,
 
 		for (j = 0; j <
 			cdm_mgr.nodes[i].data->dt_num_supported_clients; j++) {
-			CAM_DBG(CAM_CDM, "client name:%s",
-				cdm_mgr.nodes[i].data->dt_cdm_client_name[j]);
+			CAM_DBG(CAM_CDM, "client name:%s dev Index: %d",
+				cdm_mgr.nodes[i].data->dt_cdm_client_name[j],
+				i);
 			if (!strcmp(
 				cdm_mgr.nodes[i].data->dt_cdm_client_name[j],
-				client_name)) {
+				client_name) || !strcmp(
+				cdm_mgr.nodes[i].data->dt_cdm_client_name[j],
+				name_index)) {
 				rc = 0;
 				*hw_index = i;
 				break;
@@ -140,9 +138,14 @@ int cam_cdm_get_iommu_handle(char *identifier,
 			mutex_unlock(&cdm_mgr.nodes[i].lock);
 			continue;
 		}
+		CAM_DBG(CAM_CDM, "dt_num_supported_clients=%d",
+			cdm_mgr.nodes[i].data->dt_num_supported_clients);
 		for (j = 0; j <
 			 cdm_mgr.nodes[i].data->dt_num_supported_clients;
 			j++) {
+			CAM_DBG(CAM_CDM, "client name:%s dev Index: %d",
+				cdm_mgr.nodes[i].data->dt_cdm_client_name[j],
+				i);
 			if (!strcmp(
 				cdm_mgr.nodes[i].data->dt_cdm_client_name[j],
 				identifier)) {
@@ -164,6 +167,8 @@ int cam_cdm_acquire(struct cam_cdm_acquire_data *data)
 {
 	int rc = -EPERM;
 	struct cam_hw_intf *hw;
+	struct cam_hw_info *cdm_hw;
+	struct cam_cdm *core = NULL;
 	uint32_t hw_index = 0;
 
 	if ((!data) || (!data->base_array_cnt))
@@ -186,12 +191,17 @@ int cam_cdm_acquire(struct cam_cdm_acquire_data *data)
 		CAM_ERR(CAM_CDM, "Failed to identify associated hw id");
 		goto end;
 	} else {
-		CAM_DBG(CAM_CDM, "hw_index:%d", hw_index);
 		hw = cdm_mgr.nodes[hw_index].device;
 		if (hw && hw->hw_ops.process_cmd) {
+			cdm_hw = hw->hw_priv;
+			core = (struct cam_cdm *)cdm_hw->core_info;
+			data->id = core->id;
+			CAM_DBG(CAM_CDM,
+				"Device = %s, hw_index = %d, CDM id = %d",
+				data->identifier, hw_index, data->id);
 			rc = hw->hw_ops.process_cmd(hw->hw_priv,
-					CAM_CDM_HW_INTF_CMD_ACQUIRE, data,
-					sizeof(struct cam_cdm_acquire_data));
+				CAM_CDM_HW_INTF_CMD_ACQUIRE, data,
+				sizeof(struct cam_cdm_acquire_data));
 			if (rc < 0) {
 				CAM_ERR(CAM_CDM, "CDM hw acquire failed");
 				goto end;
@@ -211,6 +221,19 @@ end:
 	return rc;
 }
 EXPORT_SYMBOL(cam_cdm_acquire);
+
+struct cam_cdm_utils_ops *cam_cdm_publish_ops(void)
+{
+	struct cam_hw_version cdm_version;
+
+	cdm_version.major = 1;
+	cdm_version.minor = 0;
+	cdm_version.incr = 0;
+	cdm_version.reserved = 0;
+
+	return cam_cdm_get_ops(0, &cdm_version, true);
+}
+EXPORT_SYMBOL(cam_cdm_publish_ops);
 
 int cam_cdm_release(uint32_t handle)
 {
@@ -388,6 +411,128 @@ int cam_cdm_reset_hw(uint32_t handle)
 }
 EXPORT_SYMBOL(cam_cdm_reset_hw);
 
+int cam_cdm_flush_hw(uint32_t handle)
+{
+	uint32_t hw_index;
+	int rc = -EINVAL;
+	struct cam_hw_intf *hw;
+
+	if (get_cdm_mgr_refcount()) {
+		CAM_ERR(CAM_CDM, "CDM intf mgr get refcount failed");
+		rc = -EPERM;
+		return rc;
+	}
+
+	hw_index = CAM_CDM_GET_HW_IDX(handle);
+	if (hw_index < CAM_CDM_INTF_MGR_MAX_SUPPORTED_CDM) {
+		hw = cdm_mgr.nodes[hw_index].device;
+		if (hw && hw->hw_ops.process_cmd) {
+			rc = hw->hw_ops.process_cmd(hw->hw_priv,
+				CAM_CDM_HW_INTF_CMD_FLUSH_HW, &handle,
+				sizeof(handle));
+			if (rc < 0)
+				CAM_ERR(CAM_CDM,
+					"CDM hw release failed for handle=%x",
+					handle);
+		} else {
+			CAM_ERR(CAM_CDM, "hw idx %d doesn't have release ops",
+				hw_index);
+		}
+	}
+	put_cdm_mgr_refcount();
+
+	return rc;
+}
+EXPORT_SYMBOL(cam_cdm_flush_hw);
+
+int cam_cdm_handle_error(uint32_t handle)
+{
+	uint32_t hw_index;
+	int rc = -EINVAL;
+	struct cam_hw_intf *hw;
+
+	if (get_cdm_mgr_refcount()) {
+		CAM_ERR(CAM_CDM, "CDM intf mgr get refcount failed");
+		rc = -EPERM;
+		return rc;
+	}
+
+	hw_index = CAM_CDM_GET_HW_IDX(handle);
+	if (hw_index < CAM_CDM_INTF_MGR_MAX_SUPPORTED_CDM) {
+		hw = cdm_mgr.nodes[hw_index].device;
+		if (hw && hw->hw_ops.process_cmd) {
+			rc = hw->hw_ops.process_cmd(hw->hw_priv,
+				CAM_CDM_HW_INTF_CMD_HANDLE_ERROR,
+				&handle,
+				sizeof(handle));
+			if (rc < 0)
+				CAM_ERR(CAM_CDM,
+					"CDM hw release failed for handle=%x",
+					handle);
+		} else {
+			CAM_ERR(CAM_CDM, "hw idx %d doesn't have release ops",
+				hw_index);
+		}
+	}
+	put_cdm_mgr_refcount();
+
+	return rc;
+}
+EXPORT_SYMBOL(cam_cdm_handle_error);
+
+int cam_cdm_detect_hang_error(uint32_t handle)
+{
+	uint32_t hw_index;
+	int rc = -EINVAL;
+	struct cam_hw_intf *hw;
+
+	if (get_cdm_mgr_refcount()) {
+		CAM_ERR(CAM_CDM, "CDM intf mgr get refcount failed");
+		rc = -EPERM;
+		return rc;
+	}
+
+	hw_index = CAM_CDM_GET_HW_IDX(handle);
+	if (hw_index < CAM_CDM_INTF_MGR_MAX_SUPPORTED_CDM) {
+		hw = cdm_mgr.nodes[hw_index].device;
+		if (hw && hw->hw_ops.process_cmd)
+			rc = hw->hw_ops.process_cmd(hw->hw_priv,
+				CAM_CDM_HW_INTF_CMD_HANG_DETECT,
+				&handle,
+				sizeof(handle));
+	}
+	put_cdm_mgr_refcount();
+
+	return rc;
+}
+EXPORT_SYMBOL(cam_cdm_detect_hang_error);
+
+int cam_cdm_dump_debug_registers(uint32_t handle)
+{
+	uint32_t hw_index;
+	int rc = -EINVAL;
+	struct cam_hw_intf *hw;
+
+	if (get_cdm_mgr_refcount()) {
+		CAM_ERR(CAM_CDM, "CDM intf mgr get refcount failed");
+		rc = -EPERM;
+		return rc;
+	}
+
+	hw_index = CAM_CDM_GET_HW_IDX(handle);
+	if (hw_index < CAM_CDM_INTF_MGR_MAX_SUPPORTED_CDM) {
+		hw = cdm_mgr.nodes[hw_index].device;
+		if (hw && hw->hw_ops.process_cmd)
+			rc = hw->hw_ops.process_cmd(hw->hw_priv,
+				CAM_CDM_HW_INTF_DUMP_DBG_REGS,
+				&handle,
+				sizeof(handle));
+	}
+	put_cdm_mgr_refcount();
+
+	return rc;
+}
+
 int cam_cdm_intf_register_hw_cdm(struct cam_hw_intf *hw,
 	struct cam_cdm_private_dt_data *data, enum cam_cdm_type type,
 	uint32_t *index)
@@ -472,9 +617,11 @@ int cam_cdm_intf_deregister_hw_cdm(struct cam_hw_intf *hw,
 	return rc;
 }
 
-static int cam_cdm_intf_probe(struct platform_device *pdev)
+static int cam_cdm_intf_component_bind(struct device *dev,
+	struct device *master_dev, void *data)
 {
 	int i, rc;
+	struct platform_device *pdev = to_platform_device(dev);
 
 	rc = cam_cdm_intf_mgr_soc_get_dt_properties(pdev, &cdm_mgr);
 	if (rc) {
@@ -508,23 +655,25 @@ static int cam_cdm_intf_probe(struct platform_device *pdev)
 		mutex_unlock(&cam_cdm_mgr_lock);
 	}
 
-	CAM_DBG(CAM_CDM, "CDM Intf probe done");
+	CAM_DBG(CAM_CDM, "CDM Intf component bound successfully");
 
 	return rc;
 }
 
-static int cam_cdm_intf_remove(struct platform_device *pdev)
+static void cam_cdm_intf_component_unbind(struct device *dev,
+	struct device *master_dev, void *data)
 {
-	int i, rc = -EBUSY;
+	int i;
+	struct platform_device *pdev = to_platform_device(dev);
 
 	if (get_cdm_mgr_refcount()) {
 		CAM_ERR(CAM_CDM, "CDM intf mgr get refcount failed");
-		return rc;
+		return;
 	}
 
 	if (cam_virtual_cdm_remove(pdev)) {
 		CAM_ERR(CAM_CDM, "Virtual CDM remove failed");
-		goto end;
+		return;
 	}
 	put_cdm_mgr_refcount();
 
@@ -539,7 +688,6 @@ static int cam_cdm_intf_remove(struct platform_device *pdev)
 		if (cdm_mgr.nodes[i].device || cdm_mgr.nodes[i].data ||
 			(cdm_mgr.nodes[i].refcount != 0)) {
 			CAM_ERR(CAM_CDM, "Valid node present in index=%d", i);
-			mutex_unlock(&cam_cdm_mgr_lock);
 			goto end;
 		}
 		mutex_destroy(&cdm_mgr.nodes[i].lock);
@@ -548,35 +696,54 @@ static int cam_cdm_intf_remove(struct platform_device *pdev)
 		cdm_mgr.nodes[i].refcount = 0;
 	}
 	cdm_mgr.probe_done = false;
-	rc = 0;
 
 end:
 	mutex_unlock(&cam_cdm_mgr_lock);
+}
+
+const static struct component_ops cam_cdm_intf_component_ops = {
+	.bind = cam_cdm_intf_component_bind,
+	.unbind = cam_cdm_intf_component_unbind,
+};
+
+static int cam_cdm_intf_probe(struct platform_device *pdev)
+{
+	int rc = 0;
+
+	CAM_DBG(CAM_CDM, "Adding CDM INTF component");
+	rc = component_add(&pdev->dev, &cam_cdm_intf_component_ops);
+	if (rc)
+		CAM_ERR(CAM_CDM, "failed to add component rc: %d", rc);
+
 	return rc;
 }
 
-static struct platform_driver cam_cdm_intf_driver = {
+static int cam_cdm_intf_remove(struct platform_device *pdev)
+{
+	component_del(&pdev->dev, &cam_cdm_intf_component_ops);
+	return 0;
+}
+
+struct platform_driver cam_cdm_intf_driver = {
 	.probe = cam_cdm_intf_probe,
 	.remove = cam_cdm_intf_remove,
 	.driver = {
-	.name = "msm_cam_cdm_intf",
-	.owner = THIS_MODULE,
-	.of_match_table = msm_cam_cdm_intf_dt_match,
-	.suppress_bind_attrs = true,
+		.name = "msm_cam_cdm_intf",
+		.owner = THIS_MODULE,
+		.of_match_table = msm_cam_cdm_intf_dt_match,
+		.suppress_bind_attrs = true,
 	},
 };
 
-static int __init cam_cdm_intf_init_module(void)
+int cam_cdm_intf_init_module(void)
 {
 	return platform_driver_register(&cam_cdm_intf_driver);
 }
 
-static void __exit cam_cdm_intf_exit_module(void)
+void cam_cdm_intf_exit_module(void)
 {
 	platform_driver_unregister(&cam_cdm_intf_driver);
 }
 
-module_init(cam_cdm_intf_init_module);
-module_exit(cam_cdm_intf_exit_module);
 MODULE_DESCRIPTION("MSM Camera CDM Intf driver");
 MODULE_LICENSE("GPL v2");

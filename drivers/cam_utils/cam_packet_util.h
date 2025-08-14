@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _CAM_PACKET_UTIL_H_
@@ -37,8 +31,14 @@ struct cam_kmd_buf_info {
 typedef int (*cam_packet_generic_blob_handler)(void *user_data,
 	uint32_t blob_type, uint32_t blob_size, uint8_t *blob_data);
 
-/* set resource bitmap callback function type */
-typedef void (*cam_fill_res_bitmap)(uint32_t res_type, unsigned long *bitmap);
+/**
+ * cam_packet_util_put_cmd_mem_addr()
+ *
+ * @brief                  Put command buffer address
+ *
+ * @handle:                Command buffer memory handle
+ */
+void cam_packet_util_put_cmd_mem_addr(int handle);
 
 /**
  * cam_packet_util_get_cmd_mem_addr()
@@ -70,6 +70,8 @@ int cam_packet_util_get_cmd_mem_addr(int handle, uint32_t **buf_addr,
 int cam_packet_util_validate_packet(struct cam_packet *packet,
 	size_t remain_len);
 
+int cam_packet_util_copy_pkt_to_kmd(struct cam_packet *packet_u,
+	struct cam_packet **packet, size_t remain_len);
 /**
  * cam_packet_util_validate_cmd_desc()
  *
@@ -97,6 +99,20 @@ int cam_packet_util_get_kmd_buffer(struct cam_packet *packet,
 	struct cam_kmd_buf_info *kmd_buf_info);
 
 /**
+ * cam_packet_dump_patch_info()
+ *
+ * @brief:              Dump patch info in case of page fault
+ *
+ * @packet:             Input packet containing Command Buffers and Patches
+ * @iommu_hdl:          IOMMU handle of the HW Device that received the packet
+ * @sec_iommu_hdl:      Secure IOMMU handle of the HW Device that
+ *                      received the packet
+ *
+ */
+void cam_packet_dump_patch_info(struct cam_packet *packet,
+	int32_t iommu_hdl, int32_t sec_mmu_hdl);
+
+/**
  * cam_packet_util_process_patches()
  *
  * @brief:              Replace the handle in Packet to Address using the
@@ -106,14 +122,12 @@ int cam_packet_util_get_kmd_buffer(struct cam_packet *packet,
  * @iommu_hdl:          IOMMU handle of the HW Device that received the packet
  * @sec_iommu_hdl:      Secure IOMMU handle of the HW Device that
  *                      received the packet
- * @pf_dump_flag:       if set, it will dump the info,
- *                      otherwise will do patching
  *
  * @return:             0: Success
  *                      Negative: Failure
  */
 int cam_packet_util_process_patches(struct cam_packet *packet,
-	int32_t iommu_hdl, int32_t sec_mmu_hdl, int pf_dump_flag);
+	int32_t iommu_hdl, int32_t sec_mmu_hdl);
 
 /**
  * cam_packet_util_process_generic_cmd_buffer()
@@ -136,19 +150,38 @@ int cam_packet_util_process_generic_cmd_buffer(
 	cam_packet_generic_blob_handler blob_handler_cb, void *user_data);
 
 /**
- * cam_packet_validate_plane_size()
+ * @brief :            API to retrieve image buffers from presil after processing is
+ *                     done,using packet from request
  *
- * @brief:             Utility function to calculate and validate size of buffer
- *                     required for a format.
- * @io_cfg:            Contains IO config info
- * @plane_index        Plane index for which size is to be calculated
+ * @packet:            Packet pointer for current request
+ * @iommu_hdl:         IOMMU hdl for Image buffers
+ * @out_res_id:        Resource ID corresponding to the output buffer
  *
- * @return:            Size of buffer
+ * @return:            Success or Failure
+ */
+int cam_presil_retrieve_buffers_from_packet(struct cam_packet *packet, int iommu_hdl,
+	int out_res_id);
+
+/**
+ * @brief : API to send relevant buffers to presil
+ *
+ * @packet :            Packet pointer for current request
+ * @img_iommu_hdl:      IOMMU hdl for Image buffers
+ * @cdm_iommu_hdl:      IOMMU hdl for cdm buffers
  *
  */
-int32_t cam_packet_validate_plane_size(
-	struct cam_buf_io_cfg *io_cfg,
-	int plane_index,
-	size_t size);
+int cam_presil_send_buffers_from_packet(struct cam_packet *packet, int img_iommu_hdl,
+	int cdm_iommu_hdl);
+
+/**
+ * @brief : API to handle the blob data to get blob type and size
+ *
+ * @length :            length of the blob
+ * @blob_ptr:           blob base address
+ * @blob_handler_cb:    blob handler call back
+ * @user_data:          user data information
+ */
+int cam_packet_util_process_generic_blob(uint32_t length, uint32_t *blob_ptr,
+	cam_packet_generic_blob_handler blob_handler_cb, void *user_data);
 
 #endif /* _CAM_PACKET_UTIL_H_ */

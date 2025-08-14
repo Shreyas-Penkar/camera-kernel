@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #ifndef _CAM_OIS_DEV_H_
 #define _CAM_OIS_DEV_H_
@@ -31,6 +25,8 @@
 
 #define DEFINE_MSM_MUTEX(mutexname) \
 	static struct mutex mutexname = __MUTEX_INITIALIZER(mutexname)
+
+#define OIS_DRIVER_I2C "cam-i2c-ois"
 
 enum cam_ois_state {
 	CAM_OIS_INIT,
@@ -99,8 +95,10 @@ struct cam_ois_intf_params {
  * @cci_i2c_master  :   I2C structure
  * @v4l2_dev_str    :   V4L2 device structure
  * @bridge_intf     :   bridge interface params
+ * @i2c_fwinit_data :   ois i2c firmware init settings
  * @i2c_init_data   :   ois i2c init settings
  * @i2c_mode_data   :   ois i2c mode settings
+ * @i2c_time_data   :   ois i2c time write settings
  * @i2c_calib_data  :   ois i2c calib settings
  * @ois_device_type :   ois device type
  * @cam_ois_state   :   ois_device_state
@@ -120,9 +118,11 @@ struct cam_ois_ctrl_t {
 	enum cci_device_num cci_num;
 	struct cam_subdev v4l2_dev_str;
 	struct cam_ois_intf_params bridge_intf;
+	struct i2c_settings_array i2c_fwinit_data;
 	struct i2c_settings_array i2c_init_data;
 	struct i2c_settings_array i2c_calib_data;
 	struct i2c_settings_array i2c_mode_data;
+	struct i2c_settings_array i2c_time_data;
 	enum msm_camera_device_type_t ois_device_type;
 	enum cam_ois_state cam_ois_state;
 	char ois_name[32];
@@ -131,4 +131,19 @@ struct cam_ois_ctrl_t {
 	struct cam_ois_opcode opcode;
 };
 
+/**
+ * @brief : API to register OIS hw to platform framework.
+ * @return struct platform_device pointer on on success, or ERR_PTR() on error.
+ */
+int cam_ois_driver_init(void);
+
+/**
+ * @brief : API to remove OIS Hw from platform framework.
+ */
+void cam_ois_driver_exit(void);
+
+/**
+ * @brief : API to remove OIS component.
+ */
+void cam_ois_i2c_component_del_wrapper(struct i2c_client *client);
 #endif /*_CAM_OIS_DEV_H_ */

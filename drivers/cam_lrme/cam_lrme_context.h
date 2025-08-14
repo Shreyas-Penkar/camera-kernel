@@ -1,13 +1,6 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2019, 2021, The Linux Foundation. All rights reserved.
  */
 
 #ifndef _CAM_LRME_CONTEXT_H_
@@ -17,9 +10,8 @@
 #include "cam_context_utils.h"
 #include "cam_hw_mgr_intf.h"
 #include "cam_req_mgr_interface.h"
-#include "cam_sync_api.h"
 
-#define CAM_LRME_CTX_INDEX_SHIFT 32
+#define CAM_LRME_CTX_INDEX_SHIFT 16
 
 /**
  * struct cam_lrme_context
@@ -35,7 +27,7 @@ struct cam_lrme_context {
 
 int cam_lrme_context_init(struct cam_lrme_context *lrme_ctx,
 	struct cam_context *base_ctx, struct cam_hw_mgr_intf *hw_intf,
-	uint32_t index);
+	uint32_t index, int img_iommu_hdl);
 int cam_lrme_context_deinit(struct cam_lrme_context *lrme_ctx);
 
 #endif /* _CAM_LRME_CONTEXT_H_ */

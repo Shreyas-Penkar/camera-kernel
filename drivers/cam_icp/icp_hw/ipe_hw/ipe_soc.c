@@ -1,19 +1,12 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
-#include <linux/dma-buf.h>
 #include <media/cam_defs.h>
 #include <media/cam_icp.h>
 #include "ipe_soc.h"
@@ -111,12 +104,21 @@ int cam_ipe_init_soc_resources(struct cam_hw_soc_info *soc_info,
 	return rc;
 }
 
+void cam_ipe_deinit_soc_resources(struct cam_hw_soc_info *soc_info)
+{
+	int rc = 0;
+
+	rc = cam_soc_util_release_platform_resource(soc_info);
+	if (rc)
+		CAM_WARN(CAM_ICP, "release platform resources fail");
+}
+
 int cam_ipe_enable_soc_resources(struct cam_hw_soc_info *soc_info)
 {
 	int rc = 0;
 
 	rc = cam_soc_util_enable_platform_resource(soc_info, true,
-		CAM_SVS_VOTE, false);
+		soc_info->lowest_clk_level, false);
 	if (rc) {
 		CAM_ERR(CAM_ICP, "enable platform failed");
 		return rc;
@@ -139,7 +141,7 @@ int cam_ipe_disable_soc_resources(struct cam_hw_soc_info *soc_info,
 }
 
 int cam_ipe_update_clk_rate(struct cam_hw_soc_info *soc_info,
-	uint32_t clk_rate)
+	uint32_t *clk_rate)
 {
 	int32_t src_clk_idx;
 
@@ -150,14 +152,14 @@ int cam_ipe_update_clk_rate(struct cam_hw_soc_info *soc_info,
 
 	if ((soc_info->clk_level_valid[CAM_TURBO_VOTE] == true) &&
 		(soc_info->clk_rate[CAM_TURBO_VOTE][src_clk_idx] != 0) &&
-		(clk_rate > soc_info->clk_rate[CAM_TURBO_VOTE][src_clk_idx])) {
-		CAM_DBG(CAM_ICP, "clk_rate %d greater than max, reset to %d",
-			clk_rate,
+		(*clk_rate > soc_info->clk_rate[CAM_TURBO_VOTE][src_clk_idx])) {
+		CAM_DBG(CAM_PERF, "clk_rate %d greater than max, reset to %d",
+			*clk_rate,
 			soc_info->clk_rate[CAM_TURBO_VOTE][src_clk_idx]);
-		clk_rate = soc_info->clk_rate[CAM_TURBO_VOTE][src_clk_idx];
+		*clk_rate = soc_info->clk_rate[CAM_TURBO_VOTE][src_clk_idx];
 	}
 
-	return cam_soc_util_set_src_clk_rate(soc_info, clk_rate);
+	return cam_soc_util_set_src_clk_rate(soc_info, *clk_rate);
 }
 
 int cam_ipe_toggle_clk(struct cam_hw_soc_info *soc_info, bool clk_enable)
@@ -165,7 +167,7 @@ int cam_ipe_toggle_clk(struct cam_hw_soc_info *soc_info, bool clk_enable)
 	int rc = 0;
 
 	if (clk_enable)
-		rc = cam_soc_util_clk_enable_default(soc_info, CAM_SVS_VOTE);
+		rc = cam_soc_util_clk_enable_default(soc_info, soc_info->lowest_clk_level);
 	else
 		cam_soc_util_clk_disable_default(soc_info);
 

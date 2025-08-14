@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _CAM_CPAS_HW_INTF_H_
@@ -26,6 +20,8 @@
 #define CAM_CPAS_POLL_MIN_USECS 200
 /* Maximum usecs to sleep while polling */
 #define CAM_CPAS_POLL_MAX_USECS 250
+/* Number of times to retry while polling */
+#define CAM_CPAS_POLL_QH_RETRY_CNT 50
 
 /**
  * enum cam_cpas_hw_type - Enum for CPAS HW type
@@ -45,7 +41,29 @@ enum cam_cpas_hw_cmd_process {
 	CAM_CPAS_HW_CMD_REG_READ,
 	CAM_CPAS_HW_CMD_AHB_VOTE,
 	CAM_CPAS_HW_CMD_AXI_VOTE,
+	CAM_CPAS_HW_CMD_LOG_VOTE,
+	CAM_CPAS_HW_CMD_SELECT_QOS,
+	CAM_CPAS_HW_CMD_LOG_EVENT,
+	CAM_CPAS_HW_CMD_GET_SCID,
+	CAM_CPAS_HW_CMD_ACTIVATE_LLC,
+	CAM_CPAS_HW_CMD_DEACTIVATE_LLC,
+	CAM_CPAS_HW_CMD_DUMP_BUFF_FILL_INFO,
+	CAM_CPAS_HW_CMD_GDSC_GET_PUT,
+	CAM_CPAS_HW_CMD_SET_CORE_HW_CLK,
+	CAM_CPAS_HW_CMD_GET_GLOBAL_TIMER_MEM_BASE,
 	CAM_CPAS_HW_CMD_INVALID,
+};
+
+/**
+ * struct cam_cpas_hw_cmd_set_core_clk : CPAS cmd struct for set core clk
+ *
+ * @hw_index: Core hw index
+ * @is_power_on: Set power on or off
+ *
+ */
+struct cam_cpas_hw_cmd_set_core_clk {
+	uint32_t hw_index;
+	bool is_power_on;
 };
 
 /**
@@ -113,12 +131,26 @@ struct cam_cpas_hw_cmd_stop {
 };
 
 /**
+ * struct cam_cpas_hw_cmd_notify_event : CPAS cmd struct for notify event
+ *
+ * @identifier_string: Identifier string passed by caller
+ * @identifier_value: Identifier value passed by caller
+ *
+ */
+struct cam_cpas_hw_cmd_notify_event {
+	const char *identifier_string;
+	int32_t identifier_value;
+};
+
+/**
  * struct cam_cpas_hw_caps : CPAS HW capabilities
  *
  * @camera_family: Camera family type
  * @camera_version: Camera version
  * @cpas_version: CPAS version
  * @camera_capability: Camera hw capabilities
+ * @fuse_info: Fuse information
+ * @rt_bw_voting_needed: RT bw voting needed
  *
  */
 struct cam_cpas_hw_caps {
@@ -126,10 +158,22 @@ struct cam_cpas_hw_caps {
 	struct cam_hw_version camera_version;
 	struct cam_hw_version cpas_version;
 	uint32_t camera_capability;
+	struct cam_cpas_fuse_info fuse_info;
+	uint32_t rt_bw_voting_needed;
 };
 
 int cam_cpas_hw_probe(struct platform_device *pdev,
 	struct cam_hw_intf **hw_intf);
 int cam_cpas_hw_remove(struct cam_hw_intf *cpas_hw_intf);
 
+/**
+ * @brief : API to register CPAS hw to platform framework.
+ * @return struct platform_device pointer on on success, or ERR_PTR() on error.
+ */
+int cam_cpas_dev_init_module(void);
+
+/**
+ * @brief : API to remove CPAS interface from platform framework.
+ */
+void cam_cpas_dev_exit_module(void);
 #endif /* _CAM_CPAS_HW_INTF_H_ */

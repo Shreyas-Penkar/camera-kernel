@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2018, 2020-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022, 2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _CAM_CSIPHY_CORE_H_
@@ -56,4 +50,46 @@ irqreturn_t cam_csiphy_irq(int irq_num, void *data);
  */
 void cam_csiphy_shutdown(struct csiphy_device *csiphy_dev);
 
+/**
+ * @soc_idx : CSIPHY cell index
+ *
+ * This API registers base address per soc_idx
+ */
+int cam_csiphy_register_baseaddress(struct csiphy_device *csiphy_dev);
+
+/**
+ * @get_access : Get Access for the Main Camera over AON Camera
+ * @phy_idx    : To acquire the correct PHY hw to do the operation with
+ *
+ * This API provides Utility/helper function to program the MUX for
+ * correct PHY hw.
+ *
+ */
+int cam_csiphy_util_update_aon_ops(bool get_access, uint32_t phy_idx);
+
+
+/**
+ * @csiphy_dev : CSIPhy device structure
+ *
+ * This API updates the auxiliary settings mask for the current data rate
+ *
+ */
+void cam_csiphy_update_auxiliary_mask(struct csiphy_device *csiphy_dev);
+
+/**
+ * @csiphy_dev: CSIPhy device structure
+ *
+ * This API allows to print all the cphy/dphy specific status registers
+ */
+int cam_csiphy_dump_status_reg(struct csiphy_device *csiphy_dev);
+
+/**
+ * @phy_idx         : To acquire the correct PHY hw to do the operation with
+ * @aon_camera_id   : AON Camera ID
+ *
+ * This API provides Utility/helper function to register AON Hw supprot for
+ * correct PHY hw.
+ *
+ */
+int cam_csiphy_util_update_aon_registration(uint32_t phy_idx, uint8_t aon_camera_id);
 #endif /* _CAM_CSIPHY_CORE_H_ */

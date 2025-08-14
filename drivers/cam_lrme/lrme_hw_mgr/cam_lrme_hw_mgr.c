@@ -1,19 +1,14 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <media/cam_cpas.h>
 #include <media/cam_req_mgr.h>
+#include <media/cam_sync.h>
 
 #include "cam_io_util.h"
 #include "cam_soc_util.h"
@@ -123,6 +118,10 @@ static int cam_lrme_mgr_util_packet_validate(struct cam_packet *packet,
 		packet->cmd_buf_offset);
 
 	for (i = 0; i < packet->num_cmd_buf; i++) {
+		rc = cam_packet_util_validate_cmd_desc(&cmd_desc[i]);
+		if (rc)
+			return rc;
+
 		if (!cmd_desc[i].length)
 			continue;
 
@@ -151,7 +150,7 @@ static int cam_lrme_mgr_util_prepare_io_buffer(int32_t iommu_hdl,
 	int rc = -EINVAL;
 	uint32_t num_in_buf, num_out_buf, i, j, plane;
 	struct cam_buf_io_cfg *io_cfg;
-	uint64_t io_addr[CAM_PACKET_MAX_PLANES];
+	dma_addr_t io_addr[CAM_PACKET_MAX_PLANES];
 	size_t size;
 
 	num_in_buf = 0;
@@ -173,7 +172,7 @@ static int cam_lrme_mgr_util_prepare_io_buffer(int32_t iommu_hdl,
 				break;
 
 			rc = cam_mem_get_io_buf(io_cfg[i].mem_handle[plane],
-				iommu_hdl, &io_addr[plane], &size);
+				iommu_hdl, &io_addr[plane], &size, NULL);
 			if (rc) {
 				CAM_ERR(CAM_LRME, "Cannot get io buf for %d %d",
 					plane, rc);
@@ -323,6 +322,10 @@ static int cam_lrme_mgr_util_prepare_hw_update_entries(
 		&prepare->packet->payload + prepare->packet->cmd_buf_offset);
 
 	for (i = 0; i < prepare->packet->num_cmd_buf; i++) {
+		rc = cam_packet_util_validate_cmd_desc(&cmd_desc[i]);
+		if (rc)
+			return rc;
+
 		if (!cmd_desc[i].length)
 			continue;
 
@@ -347,23 +350,32 @@ static int cam_lrme_mgr_util_prepare_hw_update_entries(
 
 static void cam_lrme_mgr_util_put_frame_req(
 	struct list_head *src_list,
-	struct list_head *list,
-	spinlock_t *lock)
+	struct cam_lrme_frame_request *frame_req,
+	struct mutex *lock,
+	bool free_buffer)
 {
-	spin_lock(lock);
-	list_add_tail(list, src_list);
-	spin_unlock(lock);
+	if (!frame_req) {
+		CAM_ERR(CAM_LRME, "Invalid frame_req");
+		return;
+	}
+
+	mutex_lock(lock);
+	if (free_buffer)
+		cam_mem_put_cpu_buf(frame_req->hw_update_entries[0]->handle)
+
+	list_add_tail(frame_req->frame_list, src_list);
+	mutex_unlock(lock);
 }
 
 static int cam_lrme_mgr_util_get_frame_req(
 	struct list_head *src_list,
 	struct cam_lrme_frame_request **frame_req,
-	spinlock_t *lock)
+	struct mutex *lock)
 {
 	int rc = 0;
 	struct cam_lrme_frame_request *req_ptr = NULL;
 
-	spin_lock(lock);
+	mutex_lock(lock);
 	if (!list_empty(src_list)) {
 		req_ptr = list_first_entry(src_list,
 			struct cam_lrme_frame_request, frame_list);
@@ -372,7 +384,7 @@ static int cam_lrme_mgr_util_get_frame_req(
 		rc = -ENOENT;
 	}
 	*frame_req = req_ptr;
-	spin_unlock(lock);
+	mutex_unlock(lock);
 
 	return rc;
 }
@@ -430,26 +442,26 @@ static int cam_lrme_mgr_util_submit_req(void *priv, void *data)
 		else if (rc)
 			CAM_ERR(CAM_LRME, "submit request failed rc %d", rc);
 		if (rc) {
-			req_prio == 0 ? spin_lock(&hw_device->high_req_lock) :
-				spin_lock(&hw_device->normal_req_lock);
+			req_prio == 0 ? mutex_lock(&hw_device->high_req_lock) :
+				mutex_lock(&hw_device->normal_req_lock);
 			list_add(&frame_req->frame_list,
 				(req_prio == 0 ?
 				 &hw_device->frame_pending_list_high :
 				 &hw_device->frame_pending_list_normal));
-			req_prio == 0 ? spin_unlock(&hw_device->high_req_lock) :
-				spin_unlock(&hw_device->normal_req_lock);
+			req_prio == 0 ? mutex_unlock(&hw_device->high_req_lock) :
+				mutex_unlock(&hw_device->normal_req_lock);
 		}
 		if (rc == -EBUSY)
 			rc = 0;
 	} else {
-		req_prio == 0 ? spin_lock(&hw_device->high_req_lock) :
-			spin_lock(&hw_device->normal_req_lock);
+		req_prio == 0 ? mutex_lock(&hw_device->high_req_lock) :
+			mutex_lock(&hw_device->normal_req_lock);
 		list_add(&frame_req->frame_list,
 			(req_prio == 0 ?
 			 &hw_device->frame_pending_list_high :
 			 &hw_device->frame_pending_list_normal));
-		req_prio == 0 ? spin_unlock(&hw_device->high_req_lock) :
-			spin_unlock(&hw_device->normal_req_lock);
+		req_prio == 0 ? mutex_unlock(&hw_device->high_req_lock) :
+			mutex_unlock(&hw_device->normal_req_lock);
 		rc = -EINVAL;
 	}
 
@@ -462,12 +474,12 @@ static int cam_lrme_mgr_util_schedule_frame_req(
 	struct cam_lrme_hw_mgr *hw_mgr, struct cam_lrme_device *hw_device)
 {
 	int rc = 0;
-	struct crm_workq_task *task;
+	struct crm_worker_task *task;
 	struct cam_lrme_mgr_work_data *work_data;
 
-	task = cam_req_mgr_workq_get_task(hw_device->work);
-	if (!task) {
-		CAM_ERR(CAM_LRME, "Can not get task for worker");
+	task = cam_req_mgr_worker_get_task(hw_device->work);
+	if (IS_ERR_OR_NULL(task)) {
+		CAM_ERR(CAM_LRME, "Can not get task = %d for worker", PTR_ERR(task));
 		return -ENOMEM;
 	}
 
@@ -476,7 +488,7 @@ static int cam_lrme_mgr_util_schedule_frame_req(
 
 	task->process_cb = cam_lrme_mgr_util_submit_req;
 	CAM_DBG(CAM_LRME, "enqueue submit task");
-	rc = cam_req_mgr_workq_enqueue_task(task, hw_mgr, CRM_TASK_PRIORITY_0);
+	rc = cam_req_mgr_worker_enqueue_task(task, hw_mgr, CRM_TASK_PRIORITY_0);
 
 	return rc;
 }
@@ -505,7 +517,7 @@ static int cam_lrme_mgr_cb(void *data,
 {
 	struct cam_lrme_hw_mgr *hw_mgr = &g_lrme_hw_mgr;
 	int rc = 0;
-	bool frame_abort = true;
+	uint32_t evt_id = CAM_CTX_EVT_ID_ERROR;
 	struct cam_lrme_frame_request *frame_req;
 	struct cam_lrme_device *hw_device;
 
@@ -521,8 +533,7 @@ static int cam_lrme_mgr_cb(void *data,
 		memset(frame_req, 0x0, sizeof(*frame_req));
 		INIT_LIST_HEAD(&frame_req->frame_list);
 		cam_lrme_mgr_util_put_frame_req(&hw_mgr->frame_free_list,
-				&frame_req->frame_list,
-				&hw_mgr->free_req_lock);
+				frame_req, &hw_mgr->free_req_lock, true);
 		cb_args->cb_type &= ~CAM_LRME_CB_PUT_FRAME;
 		frame_req = NULL;
 	}
@@ -537,10 +548,10 @@ static int cam_lrme_mgr_cb(void *data,
 
 	if (cb_args->cb_type & CAM_LRME_CB_BUF_DONE) {
 		cb_args->cb_type &= ~CAM_LRME_CB_BUF_DONE;
-		frame_abort = false;
+		evt_id = CAM_CTX_EVT_ID_SUCCESS;
 	} else if (cb_args->cb_type & CAM_LRME_CB_ERROR) {
 		cb_args->cb_type &= ~CAM_LRME_CB_ERROR;
-		frame_abort = true;
+		evt_id = CAM_CTX_EVT_ID_ERROR;
 	} else {
 		CAM_ERR(CAM_LRME, "Wrong cb type %d, req %lld",
 			cb_args->cb_type, frame_req->req_id);
@@ -551,18 +562,22 @@ static int cam_lrme_mgr_cb(void *data,
 		struct cam_hw_done_event_data buf_data;
 
 		buf_data.request_id = frame_req->req_id;
-		CAM_DBG(CAM_LRME, "frame req %llu, frame_abort %d",
-			frame_req->req_id, frame_abort);
+		buf_data.evt_param = (cb_args->cb_type & CAM_LRME_CB_ERROR) ?
+			CAM_SYNC_LRME_EVENT_CB_ERROR :
+			CAM_SYNC_COMMON_EVENT_SUCCESS;
+		CAM_DBG(CAM_LRME, "frame req %llu, evt_id %d",
+			frame_req->req_id, evt_id);
 		rc = hw_mgr->event_cb(frame_req->ctxt_to_hw_map,
-			frame_abort, &buf_data);
+			evt_id, &buf_data);
 	} else {
 		CAM_ERR(CAM_LRME, "No cb function");
 	}
+
 	memset(frame_req, 0x0, sizeof(*frame_req));
 	INIT_LIST_HEAD(&frame_req->frame_list);
 	cam_lrme_mgr_util_put_frame_req(&hw_mgr->frame_free_list,
 				&frame_req->frame_list,
-				&hw_mgr->free_req_lock);
+				&hw_mgr->free_req_lock, true);
 
 	rc = cam_lrme_mgr_util_schedule_frame_req(hw_mgr, hw_device);
 
@@ -681,10 +696,9 @@ static int cam_lrme_mgr_hw_dump(void *hw_mgr_priv, void *hw_dump_args)
 	rc  = cam_mem_get_cpu_buf(dump_args->buf_handle,
 		&lrme_dump_args.cpu_addr,
 		&lrme_dump_args.buf_len);
-	if (!lrme_dump_args.cpu_addr || !lrme_dump_args.buf_len || rc) {
-		CAM_ERR(CAM_LRME,
-			"lnvalid addr %u len %zu rc %d",
-			dump_args->buf_handle, lrme_dump_args.buf_len, rc);
+	if (rc) {
+		CAM_ERR(CAM_LRME, "Invalid handle %u rc %d",
+			dump_args->buf_handle, rc);
 		return rc;
 	}
 	lrme_dump_args.offset =  dump_args->offset;
@@ -695,12 +709,10 @@ static int cam_lrme_mgr_hw_dump(void *hw_mgr_priv, void *hw_dump_args)
 		CAM_LRME_HW_CMD_DUMP,
 		&lrme_dump_args,
 		sizeof(struct cam_lrme_hw_dump_args));
+	CAM_DBG(CAM_LRME, "Offset before %zu after %zu",
+		dump_args->offset, lrme_dump_args.offset);
 	dump_args->offset = lrme_dump_args.offset;
-
-	rc  = cam_mem_put_cpu_buf(dump_args->buf_handle);
-	if (rc)
-		CAM_ERR(CAM_LRME, "Cpu put failed handle %u",
-			dump_args->buf_handle);
+	cam_mem_put_cpu_buf(dump_args->buf_handle);
 	return rc;
 }
 
@@ -739,14 +751,14 @@ static int cam_lrme_mgr_hw_flush(void *hw_mgr_priv, void *hw_flush_args)
 		frame_req = req_list[i];
 		memset(frame_req, 0x0, sizeof(*frame_req));
 		cam_lrme_mgr_util_put_frame_req(&hw_mgr->frame_free_list,
-			&frame_req->frame_list, &hw_mgr->free_req_lock);
+			&frame_req->frame_list, &hw_mgr->free_req_lock, true);
 	}
 
 	req_list = (struct cam_lrme_frame_request **)args->flush_req_active;
 	for (i = 0; i < args->num_req_active; i++) {
 		frame_req = req_list[i];
 		priority = CAM_LRME_DECODE_PRIORITY(args->ctxt_to_hw_map);
-		spin_lock((priority == CAM_LRME_PRIORITY_HIGH) ?
+		mutex_lock((priority == CAM_LRME_PRIORITY_HIGH) ?
 			&hw_device->high_req_lock :
 			&hw_device->normal_req_lock);
 		if (!list_empty(&frame_req->frame_list)) {
@@ -754,10 +766,10 @@ static int cam_lrme_mgr_hw_flush(void *hw_mgr_priv, void *hw_flush_args)
 			cam_lrme_mgr_util_put_frame_req(
 				&hw_mgr->frame_free_list,
 				&frame_req->frame_list,
-				&hw_mgr->free_req_lock);
+				&hw_mgr->free_req_lock, true);
 		} else
 			req_to_flush = frame_req;
-		spin_unlock((priority == CAM_LRME_PRIORITY_HIGH) ?
+		mutex_unlock((priority == CAM_LRME_PRIORITY_HIGH) ?
 			&hw_device->high_req_lock :
 			&hw_device->normal_req_lock);
 	}
@@ -919,8 +931,7 @@ static int cam_lrme_mgr_hw_prepare_update(void *hw_mgr_priv,
 		kmd_buf.size, kmd_buf.used_bytes);
 
 	rc = cam_packet_util_process_patches(args->packet,
-		hw_mgr->device_iommu.non_secure,
-		hw_mgr->device_iommu.secure, 0);
+		hw_mgr->device_iommu.non_secure, hw_mgr->device_iommu.secure);
 	if (rc) {
 		CAM_ERR(CAM_LRME, "Patch packet failed, rc=%d", rc);
 		return rc;
@@ -1012,11 +1023,11 @@ static int cam_lrme_mgr_hw_config(void *hw_mgr_priv,
 	if (priority == CAM_LRME_PRIORITY_HIGH) {
 		cam_lrme_mgr_util_put_frame_req(
 			&hw_device->frame_pending_list_high,
-			&frame_req->frame_list, &hw_device->high_req_lock);
+			&frame_req->frame_list, &hw_device->high_req_lock, false);
 	} else {
 		cam_lrme_mgr_util_put_frame_req(
 			&hw_device->frame_pending_list_normal,
-			&frame_req->frame_list, &hw_device->normal_req_lock);
+			&frame_req->frame_list, &hw_device->normal_req_lock, false);
 	}
 
 	CAM_DBG(CAM_LRME, "schedule req %llu", frame_req->req_id);
@@ -1028,31 +1039,30 @@ static int cam_lrme_mgr_hw_config(void *hw_mgr_priv,
 static int cam_lrme_mgr_create_debugfs_entry(void)
 {
 	int rc = 0;
+	struct dentry *dbgfileptr = NULL;
 
-	g_lrme_hw_mgr.debugfs_entry.dentry =
-		debugfs_create_dir("camera_lrme", NULL);
-	if (!g_lrme_hw_mgr.debugfs_entry.dentry) {
-		CAM_ERR(CAM_LRME, "failed to create dentry");
-		return -ENOMEM;
-	}
-
-	if (!debugfs_create_bool("dump_register",
-		0644,
-		g_lrme_hw_mgr.debugfs_entry.dentry,
-		&g_lrme_hw_mgr.debugfs_entry.dump_register)) {
-		CAM_ERR(CAM_LRME, "failed to create dump register entry");
-		rc = -ENOMEM;
+	dbgfileptr = debugfs_create_dir("camera_lrme", NULL);
+	if (!dbgfileptr) {
+		CAM_ERR(CAM_ISP,"DebugFS could not create directory!");
+		rc = -ENOENT;
 		goto err;
 	}
+	/* Store parent inode for cleanup in caller */
+	g_lrme_hw_mgr.debugfs_entry.dentry = dbgfileptr;
 
-	return rc;
+	dbgfileptr = debugfs_create_bool("dump_register", 0644,
+		g_lrme_hw_mgr.debugfs_entry.dentry,
+		&g_lrme_hw_mgr.debugfs_entry.dump_register);
+	if (IS_ERR(dbgfileptr)) {
+		if (PTR_ERR(dbgfileptr) == -ENODEV)
+			CAM_WARN(CAM_LRME, "DebugFS not enabled in kernel!");
+		else
+			rc = PTR_ERR(dbgfileptr);
+	}
 
 err:
-	debugfs_remove_recursive(g_lrme_hw_mgr.debugfs_entry.dentry);
-	g_lrme_hw_mgr.debugfs_entry.dentry = NULL;
 	return rc;
 }
-
 
 int cam_lrme_mgr_register_device(
 	struct cam_hw_intf *lrme_hw_intf,
@@ -1070,18 +1080,17 @@ int cam_lrme_mgr_register_device(
 
 	memcpy(&hw_device->hw_intf, lrme_hw_intf, sizeof(struct cam_hw_intf));
 
-	spin_lock_init(&hw_device->high_req_lock);
-	spin_lock_init(&hw_device->normal_req_lock);
+	mutex_init(&hw_device->high_req_lock);
+	mutex_init(&hw_device->normal_req_lock);
 	INIT_LIST_HEAD(&hw_device->frame_pending_list_high);
 	INIT_LIST_HEAD(&hw_device->frame_pending_list_normal);
 
 	rc = snprintf(buf, sizeof(buf), "cam_lrme_device_submit_worker%d",
 		lrme_hw_intf->hw_idx);
-	CAM_DBG(CAM_LRME, "Create submit workq for %s", buf);
-	rc = cam_req_mgr_workq_create(buf,
+	CAM_DBG(CAM_LRME, "Create submit worker for %s", buf);
+	rc = cam_req_mgr_worker_create(buf,
 		CAM_LRME_WORKQ_NUM_TASK,
-		&hw_device->work, CRM_WORKQ_USAGE_NON_IRQ,
-		0);
+		&hw_device->work, CRM_WORKER_USAGE_NON_IRQ, 0);
 	if (rc) {
 		CAM_ERR(CAM_LRME,
 			"Unable to create a worker, rc=%d", rc);
@@ -1132,7 +1141,7 @@ int cam_lrme_mgr_register_device(
 	return 0;
 
 destroy_workqueue:
-	cam_req_mgr_workq_destroy(&hw_device->work);
+	cam_req_mgr_worker_destroy(&hw_device->work);
 
 	return rc;
 }
@@ -1142,7 +1151,9 @@ int cam_lrme_mgr_deregister_device(int device_index)
 	struct cam_lrme_device *hw_device;
 
 	hw_device = &g_lrme_hw_mgr.hw_device[device_index];
-	cam_req_mgr_workq_destroy(&hw_device->work);
+	cam_req_mgr_worker_destroy(&hw_device->work);
+	mutex_destroy(&hw_device->high_req_lock);
+	mutex_destroy(&hw_device->normal_req_lock);
 	memset(hw_device, 0x0, sizeof(struct cam_lrme_device));
 	g_lrme_hw_mgr.device_count--;
 
@@ -1152,6 +1163,8 @@ int cam_lrme_mgr_deregister_device(int device_index)
 int cam_lrme_hw_mgr_deinit(void)
 {
 	mutex_destroy(&g_lrme_hw_mgr.hw_mgr_mutex);
+	debugfs_remove_recursive(g_lrme_hw_mgr.debugfs_entry.dentry);
+	mutex_destroy(&g_lrme_hw_mgr.free_req_lock);
 	memset(&g_lrme_hw_mgr, 0x0, sizeof(g_lrme_hw_mgr));
 
 	return 0;
@@ -1175,7 +1188,7 @@ int cam_lrme_hw_mgr_init(struct cam_hw_mgr_intf *hw_mgr_intf,
 	memset(hw_mgr_intf, 0, sizeof(*hw_mgr_intf));
 
 	mutex_init(&g_lrme_hw_mgr.hw_mgr_mutex);
-	spin_lock_init(&g_lrme_hw_mgr.free_req_lock);
+	mutex_init(&g_lrme_hw_mgr.free_req_lock);
 	INIT_LIST_HEAD(&g_lrme_hw_mgr.frame_free_list);
 
 	/* Init hw mgr frame requests and add to free list */
@@ -1201,12 +1214,11 @@ int cam_lrme_hw_mgr_init(struct cam_hw_mgr_intf *hw_mgr_intf,
 	hw_mgr_intf->hw_write = NULL;
 	hw_mgr_intf->hw_close = NULL;
 	hw_mgr_intf->hw_flush = cam_lrme_mgr_hw_flush;
-	hw_mgr_intf->hw_dump = cam_lrme_mgr_hw_dump;
 
 	g_lrme_hw_mgr.event_cb = cam_lrme_dev_buf_done_cb;
+	hw_mgr_intf->hw_dump = cam_lrme_mgr_hw_dump;
 
 	cam_lrme_mgr_create_debugfs_entry();
-
 	CAM_DBG(CAM_LRME, "Hw mgr init done");
 	return rc;
 }

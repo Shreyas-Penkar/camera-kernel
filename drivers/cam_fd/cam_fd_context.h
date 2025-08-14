@@ -1,13 +1,6 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2018, 2021, The Linux Foundation. All rights reserved.
  */
 
 #ifndef _CAM_FD_CONTEXT_H_
@@ -31,7 +24,7 @@ struct cam_fd_context {
 
 int cam_fd_context_init(struct cam_fd_context *fd_ctx,
 	struct cam_context *base_ctx, struct cam_hw_mgr_intf *hw_intf,
-	uint32_t ctx_id);
+	uint32_t ctx_id, int img_iommu_hdl);
 int cam_fd_context_deinit(struct cam_fd_context *ctx);
 
 #endif /* _CAM_FD_CONTEXT_H_ */

@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/module.h>
@@ -15,6 +9,7 @@
 
 #include "cam_debug_util.h"
 #include "cam_fd_context.h"
+#include "cam_fd_hw_intf.h"
 #include "cam_trace.h"
 
 static const char fd_dev_name[] = "cam-fd";
@@ -124,7 +119,8 @@ static int __cam_fd_ctx_release_dev_in_activated(struct cam_context *ctx,
 	return rc;
 }
 
-static int __cam_fd_ctx_dump_dev_in_activated(struct cam_context *ctx,
+static int __cam_fd_ctx_dump_dev_in_activated(
+	struct cam_context *ctx,
 	struct cam_dump_req_cmd *cmd)
 {
 	int rc;
@@ -204,9 +200,13 @@ static struct cam_ctx_ops
 	},
 	/* Ready */
 	{
-		.ioctl_ops = { },
+		.ioctl_ops = {},
 		.crm_ops = {},
 		.irq_ops = NULL,
+	},
+	/* Flushed */
+	{
+		.ioctl_ops = {},
 	},
 	/* Activated */
 	{
@@ -225,7 +225,7 @@ static struct cam_ctx_ops
 
 int cam_fd_context_init(struct cam_fd_context *fd_ctx,
 	struct cam_context *base_ctx, struct cam_hw_mgr_intf *hw_intf,
-	uint32_t ctx_id)
+	uint32_t ctx_id, int img_iommu_hdl)
 {
 	int rc;
 
@@ -237,7 +237,7 @@ int cam_fd_context_init(struct cam_fd_context *fd_ctx,
 	memset(fd_ctx, 0, sizeof(*fd_ctx));
 
 	rc = cam_context_init(base_ctx, fd_dev_name, CAM_FD, ctx_id,
-		NULL, hw_intf, fd_ctx->req_base, CAM_CTX_REQ_MAX);
+		NULL, NULL, hw_intf, fd_ctx->req_base, CAM_CTX_REQ_MAX, img_iommu_hdl);
 	if (rc) {
 		CAM_ERR(CAM_FD, "Camera Context Base init failed, rc=%d", rc);
 		return rc;
@@ -246,6 +246,9 @@ int cam_fd_context_init(struct cam_fd_context *fd_ctx,
 	fd_ctx->base = base_ctx;
 	base_ctx->ctx_priv = fd_ctx;
 	base_ctx->state_machine = cam_fd_ctx_state_machine;
+	base_ctx->max_hw_update_entries = CAM_FD_MAX_HW_ENTRIES;
+	base_ctx->max_in_map_entries = CAM_FD_MAX_IO_BUFFERS;
+	base_ctx->max_out_map_entries = CAM_FD_MAX_IO_BUFFERS;
 
 	return rc;
 }

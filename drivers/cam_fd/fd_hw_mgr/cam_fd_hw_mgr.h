@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _CAM_FD_HW_MGR_H_
@@ -22,11 +16,12 @@
 #include "cam_cpas_api.h"
 #include "cam_debug_util.h"
 #include "cam_hw_mgr_intf.h"
-#include "cam_req_mgr_workq.h"
+#include "cam_req_mgr_worker_wrapper.h"
 #include "cam_fd_hw_intf.h"
 
 #define CAM_FD_HW_MAX            1
 #define CAM_FD_WORKQ_NUM_TASK    10
+
 /*
  * Response time threshold in ms beyond which a request is not expected to be
  * with FD hw
@@ -121,7 +116,7 @@ struct cam_fd_mgr_frame_request {
 	struct cam_fd_hw_req_private   hw_req_private;
 	struct cam_hw_update_entry     hw_update_entries[CAM_FD_MAX_HW_ENTRIES];
 	uint32_t                       num_hw_update_entries;
-	struct timeval                 submit_timestamp;
+	ktime_t                        submit_timestamp;
 };
 
 /**
@@ -165,6 +160,8 @@ struct cam_fd_mgr_work_data {
  * @work                      : Worker handle
  * @work_data                 : Worker data
  * @fd_caps                   : FD driver capabilities
+ * @num_pending_frames        : Number of total frames pending for processing
+ *                              across contexts
  */
 struct cam_fd_hw_mgr {
 	struct list_head                   free_ctx_list;
@@ -185,9 +182,10 @@ struct cam_fd_hw_mgr {
 	uint32_t                           supported_modes;
 	struct cam_fd_hw_mgr_ctx           ctx_pool[CAM_CTX_MAX];
 	struct cam_fd_mgr_frame_request    frame_req[CAM_CTX_REQ_MAX];
-	struct cam_req_mgr_core_workq     *work;
-	struct cam_fd_mgr_work_data        work_data[CAM_FD_WORKQ_NUM_TASK];
+	struct cam_req_mgr_core_worker     *work;
+	struct cam_fd_mgr_work_data        *work_data;
 	struct cam_fd_query_cap_cmd        fd_caps;
+	uint32_t                           num_pending_frames;
 };
 
 #endif /* _CAM_FD_HW_MGR_H_ */

@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022, 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/delay.h>
@@ -36,6 +30,7 @@
 #include "cam_icp_hw_mgr_intf.h"
 #include "cam_debug_util.h"
 #include "cam_smmu_api.h"
+#include "camera_main.h"
 
 #define CAM_ICP_DEV_NAME        "cam-icp"
 
@@ -56,23 +51,33 @@ static const struct of_device_id cam_icp_dt_match[] = {
 	{}
 };
 
-static void cam_icp_dev_iommu_fault_handler(
-	struct iommu_domain *domain, struct device *dev, unsigned long iova,
-	int flags, void *token, uint32_t buf_info)
+static void cam_icp_dev_iommu_fault_handler(struct cam_smmu_pf_info *pf_info)
 {
 	int i = 0;
 	struct cam_node *node = NULL;
 
-	if (!token) {
-		CAM_ERR(CAM_ICP, "invalid token in page handler cb");
+	if (!pf_info || !pf_info->token) {
+		CAM_ERR(CAM_ISP, "invalid token in page handler cb");
 		return;
 	}
 
-	node = (struct cam_node *)token;
+	node = (struct cam_node *)pf_info->token;
 
 	for (i = 0; i < node->ctx_size; i++)
-		cam_context_dump_pf_info(&(node->ctx_list[i]), iova,
-			buf_info);
+		cam_context_dump_pf_info(&(node->ctx_list[i]), pf_info);
+}
+
+static void cam_icp_dev_mini_dump_cb(void *priv, void *args)
+{
+	struct cam_context *ctx = NULL;
+
+	if (!priv || !args) {
+		CAM_ERR(CAM_ICP, "Invalid param priv: %pK args %pK", priv, args);
+		return;
+	}
+
+	ctx = (struct cam_context *)priv;
+	cam_context_mini_dump_from_hw(ctx, args);
 }
 
 static int cam_icp_subdev_open(struct v4l2_subdev *sd,
@@ -81,6 +86,8 @@ static int cam_icp_subdev_open(struct v4l2_subdev *sd,
 	struct cam_hw_mgr_intf *hw_mgr_intf = NULL;
 	struct cam_node *node = v4l2_get_subdevdata(sd);
 	int rc = 0;
+
+	cam_req_mgr_rwsem_read_op(CAM_SUBDEV_LOCK);
 
 	mutex_lock(&g_icp_dev.icp_lock);
 	if (g_icp_dev.open_cnt >= 1) {
@@ -104,10 +111,11 @@ static int cam_icp_subdev_open(struct v4l2_subdev *sd,
 	g_icp_dev.open_cnt++;
 end:
 	mutex_unlock(&g_icp_dev.icp_lock);
+	cam_req_mgr_rwsem_read_op(CAM_SUBDEV_UNLOCK);
 	return rc;
 }
 
-static int cam_icp_subdev_close(struct v4l2_subdev *sd,
+static int cam_icp_subdev_close_internal(struct v4l2_subdev *sd,
 	struct v4l2_subdev_fh *fh)
 {
 	int rc = 0;
@@ -117,7 +125,6 @@ static int cam_icp_subdev_close(struct v4l2_subdev *sd,
 	mutex_lock(&g_icp_dev.icp_lock);
 	if (g_icp_dev.open_cnt <= 0) {
 		CAM_DBG(CAM_ICP, "ICP subdev is already closed");
-		rc = -EINVAL;
 		goto end;
 	}
 	g_icp_dev.open_cnt--;
@@ -142,7 +149,20 @@ static int cam_icp_subdev_close(struct v4l2_subdev *sd,
 
 end:
 	mutex_unlock(&g_icp_dev.icp_lock);
-	return 0;
+	return rc;
+}
+
+static int cam_icp_subdev_close(struct v4l2_subdev *sd,
+	struct v4l2_subdev_fh *fh)
+{
+	bool crm_active = cam_req_mgr_is_open();
+
+	if (crm_active) {
+		CAM_DBG(CAM_ICP, "CRM is ACTIVE, close should be from CRM");
+		return 0;
+	}
+
+	return cam_icp_subdev_close_internal(sd, fh);
 }
 
 const struct v4l2_subdev_internal_ops cam_icp_subdev_internal_ops = {
@@ -150,12 +170,15 @@ const struct v4l2_subdev_internal_ops cam_icp_subdev_internal_ops = {
 	.close = cam_icp_subdev_close,
 };
 
-static int cam_icp_probe(struct platform_device *pdev)
+static int cam_icp_component_bind(struct device *dev,
+	struct device *master_dev, void *data)
 {
 	int rc = 0, i = 0;
 	struct cam_node *node;
 	struct cam_hw_mgr_intf *hw_mgr_intf;
 	int iommu_hdl = -1;
+	bool node_check = true;
+	struct platform_device *pdev = to_platform_device(dev);
 
 	if (!pdev) {
 		CAM_ERR(CAM_ICP, "pdev is NULL");
@@ -164,6 +187,7 @@ static int cam_icp_probe(struct platform_device *pdev)
 
 	g_icp_dev.sd.pdev = pdev;
 	g_icp_dev.sd.internal_ops = &cam_icp_subdev_internal_ops;
+	g_icp_dev.sd.close_seq_prior = CAM_SD_CLOSE_MEDIUM_PRIORITY;
 	rc = cam_subdev_probe(&g_icp_dev.sd, pdev, CAM_ICP_DEV_NAME,
 		CAM_ICP_DEVICE_TYPE);
 	if (rc) {
@@ -175,12 +199,13 @@ static int cam_icp_probe(struct platform_device *pdev)
 
 	hw_mgr_intf = kzalloc(sizeof(*hw_mgr_intf), GFP_KERNEL);
 	if (!hw_mgr_intf) {
-		rc = -EINVAL;
+		rc = -ENOMEM;
+		CAM_ERR(CAM_ICP, "Memory allocation fail");
 		goto hw_alloc_fail;
 	}
 
 	rc = cam_icp_hw_mgr_init(pdev->dev.of_node, (uint64_t *)hw_mgr_intf,
-		&iommu_hdl);
+		&iommu_hdl, cam_icp_dev_mini_dump_cb, &node_check);
 	if (rc) {
 		CAM_ERR(CAM_ICP, "ICP HW manager init failed: %d", rc);
 		goto hw_init_fail;
@@ -189,7 +214,7 @@ static int cam_icp_probe(struct platform_device *pdev)
 	for (i = 0; i < CAM_ICP_CTX_MAX; i++) {
 		g_icp_dev.ctx_icp[i].base = &g_icp_dev.ctx[i];
 		rc = cam_icp_context_init(&g_icp_dev.ctx_icp[i],
-					hw_mgr_intf, i);
+					hw_mgr_intf, i, iommu_hdl);
 		if (rc) {
 			CAM_ERR(CAM_ICP, "ICP context init failed");
 			goto ctx_fail;
@@ -203,13 +228,14 @@ static int cam_icp_probe(struct platform_device *pdev)
 		goto ctx_fail;
 	}
 
+	node->sd_handler = cam_icp_subdev_close_internal;
 	cam_smmu_set_client_page_fault_handler(iommu_hdl,
 		cam_icp_dev_iommu_fault_handler, node);
 
 	g_icp_dev.open_cnt = 0;
 	mutex_init(&g_icp_dev.icp_lock);
 
-	CAM_DBG(CAM_ICP, "ICP probe complete");
+	CAM_DBG(CAM_ICP, "Component bound successfully");
 
 	return rc;
 
@@ -220,43 +246,131 @@ hw_init_fail:
 	kfree(hw_mgr_intf);
 hw_alloc_fail:
 	cam_subdev_remove(&g_icp_dev.sd);
+	if (!node_check)
+		return 0;
 probe_fail:
 	return rc;
 }
 
-static int cam_icp_remove(struct platform_device *pdev)
+static void cam_icp_component_unbind(struct device *dev,
+	struct device *master_dev, void *data)
 {
 	int i;
 	struct v4l2_subdev *sd;
-	struct cam_subdev *subdev;
+	struct platform_device *pdev = to_platform_device(dev);
 
 	if (!pdev) {
 		CAM_ERR(CAM_ICP, "pdev is NULL");
-		return -ENODEV;
+		return;
 	}
 
 	sd = platform_get_drvdata(pdev);
 	if (!sd) {
 		CAM_ERR(CAM_ICP, "V4l2 subdev is NULL");
-		return -ENODEV;
-	}
-
-	subdev = v4l2_get_subdevdata(sd);
-	if (!subdev) {
-		CAM_ERR(CAM_ICP, "cam subdev is NULL");
-		return -ENODEV;
+		return;
 	}
 
 	for (i = 0; i < CAM_ICP_CTX_MAX; i++)
 		cam_icp_context_deinit(&g_icp_dev.ctx_icp[i]);
+
+	cam_icp_hw_mgr_deinit();
 	cam_node_deinit(g_icp_dev.node);
 	cam_subdev_remove(&g_icp_dev.sd);
 	mutex_destroy(&g_icp_dev.icp_lock);
+}
 
+const static struct component_ops cam_icp_component_ops = {
+	.bind = cam_icp_component_bind,
+	.unbind = cam_icp_component_unbind,
+};
+
+static int cam_icp_probe(struct platform_device *pdev)
+{
+	int rc = 0;
+
+	CAM_DBG(CAM_ICP, "Adding ICP component");
+	rc = component_add(&pdev->dev, &cam_icp_component_ops);
+	if (rc)
+		CAM_ERR(CAM_ICP, "failed to add component rc: %d", rc);
+
+	return rc;
+}
+
+static int cam_icp_remove(struct platform_device *pdev)
+{
+	component_del(&pdev->dev, &cam_icp_component_ops);
 	return 0;
 }
 
-static struct platform_driver cam_icp_driver = {
+#if defined(CONFIG_HIBERNATION)
+static int cam_icp_pm_freeze(struct device *dev)
+{
+	int rc = 0;
+	struct platform_device *pdev;
+	struct cam_subdev *sd;
+	struct cam_node *node;
+	struct cam_hw_mgr_intf *hw_mgr_intf;
+
+	if (!dev || !dev->driver || !of_device_is_compatible(dev->of_node, "qcom,cam-icp")) {
+		CAM_WARN(CAM_ICP, "ICP driver not yet probe");
+		return 0;
+	}
+
+	CAM_DBG(CAM_ICP, "ICP pm freeze enter");
+
+	pdev = to_platform_device(dev);
+	if (!pdev) {
+		CAM_ERR(CAM_ICP, "pdev is NULL");
+		rc = -EINVAL;
+		goto end;
+	}
+
+	sd = platform_get_drvdata(pdev);
+	if (!sd) {
+		CAM_ERR(CAM_ICP, "V4l2 subdev is NULL");
+		rc = -EINVAL;
+		goto end;
+	}
+
+	node = sd->token;
+	if (!node) {
+		CAM_ERR(CAM_ICP, "Node is NULL");
+		rc = -EINVAL;
+		goto end;
+	}
+
+	hw_mgr_intf = &node->hw_mgr_intf;
+	if (!hw_mgr_intf) {
+		CAM_ERR(CAM_ICP, "hw_mgr_intf is not initialized");
+		rc = -EINVAL;
+		goto end;
+	}
+
+	if (node->hw_mgr_intf.hw_close) {
+		CAM_INFO(CAM_ICP, "ICP pm close call");
+		node->hw_mgr_intf.hw_close(node->hw_mgr_intf.hw_mgr_priv, NULL);
+	}
+
+	CAM_DBG(CAM_ICP, "ICP pm freeze exit");
+end:
+	return rc;
+}
+
+static int cam_icp_pm_restore(struct device *dev)
+{
+	CAM_DBG(CAM_ICP, "ICP pm restore");
+	return 0;
+}
+#endif
+
+static const struct dev_pm_ops cam_icp_pm_ops = {
+#if defined(CONFIG_HIBERNATION)
+	.freeze = cam_icp_pm_freeze,
+	.restore = cam_icp_pm_restore
+#endif
+};
+
+struct platform_driver cam_icp_driver = {
 	.probe = cam_icp_probe,
 	.remove = cam_icp_remove,
 	.driver = {
@@ -264,19 +378,19 @@ static struct platform_driver cam_icp_driver = {
 		.owner = THIS_MODULE,
 		.of_match_table = cam_icp_dt_match,
 		.suppress_bind_attrs = true,
+		.pm = &cam_icp_pm_ops,
 	},
 };
 
-static int __init cam_icp_init_module(void)
+int cam_icp_init_module(void)
 {
 	return platform_driver_register(&cam_icp_driver);
 }
 
-static void __exit cam_icp_exit_module(void)
+void cam_icp_exit_module(void)
 {
 	platform_driver_unregister(&cam_icp_driver);
 }
-module_init(cam_icp_init_module);
-module_exit(cam_icp_exit_module);
+
 MODULE_DESCRIPTION("MSM ICP driver");
 MODULE_LICENSE("GPL v2");

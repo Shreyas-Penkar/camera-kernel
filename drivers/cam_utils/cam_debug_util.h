@@ -1,185 +1,379 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _CAM_DEBUG_UTIL_H_
 #define _CAM_DEBUG_UTIL_H_
 
-#define CAM_CDM        (1 << 0)
-#define CAM_CORE       (1 << 1)
-#define CAM_CPAS       (1 << 2)
-#define CAM_ISP        (1 << 3)
-#define CAM_CRM        (1 << 4)
-#define CAM_SENSOR     (1 << 5)
-#define CAM_SMMU       (1 << 6)
-#define CAM_SYNC       (1 << 7)
-#define CAM_ICP        (1 << 8)
-#define CAM_JPEG       (1 << 9)
-#define CAM_FD         (1 << 10)
-#define CAM_LRME       (1 << 11)
-#define CAM_FLASH      (1 << 12)
-#define CAM_ACTUATOR   (1 << 13)
-#define CAM_CCI        (1 << 14)
-#define CAM_CSIPHY     (1 << 15)
-#define CAM_EEPROM     (1 << 16)
-#define CAM_UTIL       (1 << 17)
-#define CAM_HFI        (1 << 18)
-#define CAM_CTXT       (1 << 19)
-#define CAM_OIS        (1 << 20)
-#define CAM_RES        (1 << 21)
-#define CAM_MEM        (1 << 22)
+#include <linux/platform_device.h>
+#include "cam_presil_hw_access.h"
+#include "cam_trace.h"
 
-/* CAM_IRQ_CTRL: For events in irq controller */
-#define CAM_IRQ_CTRL   (1 << 23)
+extern unsigned long long debug_mdl;
+extern unsigned int debug_type;
+extern unsigned int debug_priority;
 
-/* CAM_REQ: Tracks a request submitted to KMD */
-#define CAM_REQ        (1 << 24)
+#define CAM_IS_NULL_TO_STR(ptr) ((ptr) ? "Non-NULL" : "NULL")
 
-/* CAM_PERF: Used for performance (clock, BW etc) logs */
-#define CAM_PERF       (1 << 25)
+/* Module IDs used for debug logging */
+enum cam_debug_module_id {
+	CAM_CDM,                 /* bit 0 */
+	CAM_CORE,                /* bit 1 */
+	CAM_CPAS,                /* bit 2 */
+	CAM_ISP,                 /* bit 3 */
+	CAM_CRM,                 /* bit 4 */
+	CAM_SENSOR,              /* bit 5 */
+	CAM_SMMU,                /* bit 6 */
+	CAM_SYNC,                /* bit 7 */
+	CAM_ICP,                 /* bit 8 */
+	CAM_JPEG,                /* bit 9 */
+	CAM_FD,                  /* bit 10 */
+	CAM_LRME,                /* bit 11 */
+	CAM_FLASH,               /* bit 12 */
+	CAM_ACTUATOR,            /* bit 13 */
+	CAM_CCI,                 /* bit 14 */
+	CAM_CSIPHY,              /* bit 15 */
+	CAM_EEPROM,              /* bit 16 */
+	CAM_UTIL,                /* bit 17 */
+	CAM_HFI,                 /* bit 18 */
+	CAM_CTXT,                /* bit 19 */
+	CAM_OIS,                 /* bit 20 */
+	CAM_RES,                 /* bit 21 */
+	CAM_MEM,                 /* bit 22 */
+	CAM_IRQ_CTRL,            /* bit 23 */
+	CAM_REQ,                 /* bit 24 */
+	CAM_PERF,                /* bit 25 */
+	CAM_CUSTOM,              /* bit 26 */
+	CAM_PRESIL,              /* bit 27 */
+	CAM_OPE,                 /* bit 28 */
+	CAM_IO_ACCESS,           /* bit 29 */
+	CAM_SFE,                 /* bit 30 */
+	CAM_CRE,                 /* bit 31 */
+	CAM_PRESIL_CORE,         /* bit 32 */
+	CAM_TPG,                 /* bit 33 */
+	CAM_RPMSG,               /* bit 34 */
+	CAM_SENSOR_LITE,         /* bit 35 */
+	CAM_CSIPHY_REMOTE,       /* bit 36 */
+	CAM_DMA_FENCE,           /* bit 37 */
+	CAM_SYNX,                /* bit 36 */
+	CAM_DBG_MOD_MAX
+};
 
-#define CAM_HYP        (1 << 26)
-#define CAM_IR_LED     (1 << 27)
-#define STR_BUFFER_MAX_LENGTH  1024
-
-/*
- *  cam_debug_log()
- *
- * @brief     :  Get the Module name from module ID and print
- *               respective debug logs
- *
- * @module_id :  Respective Module ID which is calling this function
- * @func      :  Function which is calling to print logs
- * @line      :  Line number associated with the function which is calling
- *               to print log
- * @fmt       :  Formatted string which needs to be print in the log
- *
- */
-void cam_debug_log(unsigned int module_id, const char *func, const int line,
-	const char *fmt, ...);
-
-/*
- * cam_get_module_name()
- *
- * @brief     :  Get the module name from module ID
- *
- * @module_id :  Module ID which is using this function
- */
-const char *cam_get_module_name(unsigned int module_id);
-
-/*
- * CAM_ERR
- * @brief    :  This Macro will print error logs
- *
- * @__module :  Respective module id which is been calling this Macro
- * @fmt      :  Formatted string which needs to be print in log
- * @args     :  Arguments which needs to be print in log
- */
-#define CAM_ERR(__module, fmt, args...)                            \
-	pr_err("CAM_ERR: %s: %s: %d " fmt "\n",                     \
-		cam_get_module_name(__module), __func__,  __LINE__, ##args)
-/*
- * CAM_WARN
- * @brief    :  This Macro will print warning logs
- *
- * @__module :  Respective module id which is been calling this Macro
- * @fmt      :  Formatted string which needs to be print in log
- * @args     :  Arguments which needs to be print in log
- */
-#define CAM_WARN(__module, fmt, args...)                           \
-	pr_warn("CAM_WARN: %s: %s: %d " fmt "\n",                     \
-		cam_get_module_name(__module), __func__,  __LINE__, ##args)
-/*
- * CAM_INFO
- * @brief    :  This Macro will print Information logs
- *
- * @__module :  Respective module id which is been calling this Macro
- * @fmt      :  Formatted string which needs to be print in log
- * @args     :  Arguments which needs to be print in log
- */
-#define CAM_INFO(__module, fmt, args...)                           \
-	pr_info("CAM_INFO: %s: %s: %d " fmt "\n",                     \
-		cam_get_module_name(__module), __func__,  __LINE__, ##args)
+/* Log level types */
+enum cam_debug_log_level {
+	CAM_TYPE_TRACE,
+	CAM_TYPE_ERR,
+	CAM_TYPE_WARN,
+	CAM_TYPE_INFO,
+	CAM_TYPE_DBG,
+	CAM_TYPE_MAX,
+};
 
 /*
- * CAM_INFO_RATE_LIMIT
- * @brief    :  This Macro will print info logs with ratelimit
- *
- * @__module :  Respective module id which is been calling this Macro
- * @fmt      :  Formatted string which needs to be print in log
- * @args     :  Arguments which needs to be print in log
+ * enum cam_debug_priority - Priority of debug log (0 = Lowest)
  */
-#define CAM_INFO_RATE_LIMIT(__module, fmt, args...)                 \
-	pr_err_ratelimited("CAM_INFO: %s: %s: %d " fmt "\n",            \
-		cam_get_module_name(__module), __func__,  __LINE__, ##args)
+enum cam_debug_priority {
+	CAM_DBG_PRIORITY_0,
+	CAM_DBG_PRIORITY_1,
+	CAM_DBG_PRIORITY_2,
+};
 
-/*
- * CAM_INFO_RATE_LIMIT_CUSTOM
- * @brief    :  This Macro will print info logs with custom ratelimit
+static const char *cam_debug_mod_name[CAM_DBG_MOD_MAX] = {
+	[CAM_CDM]         = "CAM-CDM",
+	[CAM_CORE]        = "CAM-CORE",
+	[CAM_CRM]         = "CAM-CRM",
+	[CAM_CPAS]        = "CAM-CPAS",
+	[CAM_ISP]         = "CAM-ISP",
+	[CAM_SENSOR]      = "CAM-SENSOR",
+	[CAM_SMMU]        = "CAM-SMMU",
+	[CAM_SYNC]        = "CAM-SYNC",
+	[CAM_ICP]         = "CAM-ICP",
+	[CAM_JPEG]        = "CAM-JPEG",
+	[CAM_FD]          = "CAM-FD",
+	[CAM_LRME]        = "CAM-LRME",
+	[CAM_FLASH]       = "CAM-FLASH",
+	[CAM_ACTUATOR]    = "CAM-ACTUATOR",
+	[CAM_CCI]         = "CAM-CCI",
+	[CAM_CSIPHY]      = "CAM-CSIPHY",
+	[CAM_EEPROM]      = "CAM-EEPROM",
+	[CAM_UTIL]        = "CAM-UTIL",
+	[CAM_CTXT]        = "CAM-CTXT",
+	[CAM_HFI]         = "CAM-HFI",
+	[CAM_OIS]         = "CAM-OIS",
+	[CAM_IRQ_CTRL]    = "CAM-IRQ-CTRL",
+	[CAM_MEM]         = "CAM-MEM",
+	[CAM_PERF]        = "CAM-PERF",
+	[CAM_REQ]         = "CAM-REQ",
+	[CAM_CUSTOM]      = "CAM-CUSTOM",
+	[CAM_OPE]         = "CAM-OPE",
+	[CAM_PRESIL]      = "CAM-PRESIL",
+	[CAM_RES]         = "CAM-RES",
+	[CAM_IO_ACCESS]   = "CAM-IO-ACCESS",
+	[CAM_SFE]         = "CAM-SFE",
+	[CAM_CRE]         = "CAM-CRE",
+	[CAM_PRESIL_CORE] = "CAM-CORE-PRESIL",
+	[CAM_TPG]         = "CAM-TPG",
+	[CAM_RPMSG]       = "CAM-RPMSG",
+	[CAM_SENSOR_LITE] = "CAM-SENSORLITE",
+	[CAM_CSIPHY_REMOTE] = "CAM-CSIPHY-REMOTE",
+	[CAM_DMA_FENCE]   = "CAM_DMA_FENCE",
+	[CAM_SYNX]        = "CAM_SYNX",
+};
+
+#define ___CAM_DBG_MOD_NAME(module_id)                                      \
+__builtin_choose_expr(((module_id) == CAM_CDM), "CAM-CDM",                  \
+__builtin_choose_expr(((module_id) == CAM_CORE), "CAM-CORE",                \
+__builtin_choose_expr(((module_id) == CAM_CRM), "CAM-CRM",                  \
+__builtin_choose_expr(((module_id) == CAM_CPAS), "CAM-CPAS",                \
+__builtin_choose_expr(((module_id) == CAM_ISP), "CAM-ISP",                  \
+__builtin_choose_expr(((module_id) == CAM_SENSOR), "CAM-SENSOR",            \
+__builtin_choose_expr(((module_id) == CAM_SMMU), "CAM-SMMU",                \
+__builtin_choose_expr(((module_id) == CAM_SYNC), "CAM-SYNC",                \
+__builtin_choose_expr(((module_id) == CAM_ICP), "CAM-ICP",                  \
+__builtin_choose_expr(((module_id) == CAM_JPEG), "CAM-JPEG",                \
+__builtin_choose_expr(((module_id) == CAM_FD), "CAM-FD",                    \
+__builtin_choose_expr(((module_id) == CAM_LRME), "CAM-LRME",                \
+__builtin_choose_expr(((module_id) == CAM_FLASH), "CAM-FLASH",              \
+__builtin_choose_expr(((module_id) == CAM_ACTUATOR), "CAM-ACTUATOR",        \
+__builtin_choose_expr(((module_id) == CAM_CCI), "CAM-CCI",                  \
+__builtin_choose_expr(((module_id) == CAM_CSIPHY), "CAM-CSIPHY",            \
+__builtin_choose_expr(((module_id) == CAM_EEPROM), "CAM-EEPROM",            \
+__builtin_choose_expr(((module_id) == CAM_UTIL), "CAM-UTIL",                \
+__builtin_choose_expr(((module_id) == CAM_CTXT), "CAM-CTXT",                \
+__builtin_choose_expr(((module_id) == CAM_HFI), "CAM-HFI",                  \
+__builtin_choose_expr(((module_id) == CAM_OIS), "CAM-OIS",                  \
+__builtin_choose_expr(((module_id) == CAM_IRQ_CTRL), "CAM-IRQ-CTRL",        \
+__builtin_choose_expr(((module_id) == CAM_MEM), "CAM-MEM",                  \
+__builtin_choose_expr(((module_id) == CAM_PERF), "CAM-PERF",                \
+__builtin_choose_expr(((module_id) == CAM_REQ), "CAM-REQ",                  \
+__builtin_choose_expr(((module_id) == CAM_CUSTOM), "CAM-CUSTOM",            \
+__builtin_choose_expr(((module_id) == CAM_OPE), "CAM-OPE",                  \
+__builtin_choose_expr(((module_id) == CAM_PRESIL), "CAM-PRESIL",            \
+__builtin_choose_expr(((module_id) == CAM_RES), "CAM-RES",                  \
+__builtin_choose_expr(((module_id) == CAM_IO_ACCESS), "CAM-IO-ACCESS",      \
+__builtin_choose_expr(((module_id) == CAM_SFE), "CAM-SFE",                  \
+__builtin_choose_expr(((module_id) == CAM_CRE), "CAM-CRE",                  \
+__builtin_choose_expr(((module_id) == CAM_PRESIL_CORE), "CAM-CORE-PRESIL",  \
+__builtin_choose_expr(((module_id) == CAM_TPG), "CAM-TPG",                  \
+__builtin_choose_expr(((module_id) == CAM_RPMSG), "CAM-RPMSG",              \
+__builtin_choose_expr(((module_id) == CAM_SENSOR_LITE), "CAM-SENSORLITE",   \
+__builtin_choose_expr(((module_id) == CAM_CSIPHY_REMOTE), "CAM-CSIPHY-REMOTE", \
+__builtin_choose_expr(((module_id) == CAM_DMA_FENCE), "CAM-DMA-FENCE",      \
+__builtin_choose_expr(((module_id) == CAM_SYNX), "CAM-SYNX",                \
+"CAMERA")))))))))))))))))))))))))))))))))))))))
+
+#define CAM_DBG_MOD_NAME(module_id) \
+((module_id < CAM_DBG_MOD_MAX) ? cam_debug_mod_name[module_id] : "CAMERA")
+
+#define __CAM_DBG_MOD_NAME(module_id) \
+__builtin_choose_expr(__builtin_constant_p((module_id)), ___CAM_DBG_MOD_NAME(module_id), \
+	CAM_DBG_MOD_NAME(module_id))
+
+static const char *cam_debug_tag_name[CAM_TYPE_MAX] = {
+	[CAM_TYPE_TRACE] = "CAM_TRACE",
+	[CAM_TYPE_ERR]   = "CAM_ERR",
+	[CAM_TYPE_WARN]  = "CAM_WARN",
+	[CAM_TYPE_INFO]  = "CAM_INFO",
+	[CAM_TYPE_DBG]   = "CAM_DBG",
+};
+
+#define ___CAM_LOG_TAG_NAME(tag)                     \
+({                                                  \
+	static_assert(tag < CAM_TYPE_MAX);          \
+	cam_debug_tag_name[tag];                    \
+})
+
+#define CAM_LOG_TAG_NAME(tag) ((tag < CAM_TYPE_MAX) ? cam_debug_tag_name[tag] : "CAM_LOG")
+
+#define __CAM_LOG_TAG_NAME(tag) \
+__builtin_choose_expr(__builtin_constant_p((tag)), ___CAM_LOG_TAG_NAME(tag), \
+	CAM_LOG_TAG_NAME(tag))
+
+enum cam_log_print_type {
+	CAM_PRINT_LOG   = 0x1,
+	CAM_PRINT_TRACE = 0x2,
+	CAM_PRINT_BOTH  = 0x3,
+};
+
+#define __CAM_LOG_FMT KERN_INFO "%s: %s: %s: %d "
+
+/**
+ * cam_print_log() - function to print logs (internal use only, use macros instead)
  *
- * @__module :  Respective module id which is been calling this Macro
- * @interval :  Time interval in seconds
- * @burst    :  No of logs to print in interval time
- * @fmt      :  Formatted string which needs to be print in log
- * @args     :  Arguments which needs to be print in log
+ * @type: corresponds to enum cam_log_print_type, selects if logs are printed in log buffer,
+ *        trace buffers or both
+ * @fmt:  formatting string
+ * @args: arguments corresponding to formatting string
  */
+
+void cam_print_log(int type, const char *fmt, ...);
+
+#define __CAM_LOG(type, tag, module_id, fmt, args...)                               \
+({                                                                                  \
+	cam_print_log(type, __CAM_LOG_FMT fmt,                                      \
+		__CAM_LOG_TAG_NAME(tag), __CAM_DBG_MOD_NAME(module_id), __func__,   \
+		__LINE__, ##args);                                                  \
+})
+
+#define CAM_LOG(tag, module_id, fmt, args...) \
+__CAM_LOG(CAM_PRINT_BOTH, tag, module_id, fmt, ##args)
+
+#define CAM_LOG_RL_CUSTOM(type, module_id, interval, burst, fmt, args...)                \
+({                                                                                       \
+	static DEFINE_RATELIMIT_STATE(_rs, (interval * HZ), burst);                      \
+	__CAM_LOG(__ratelimit(&_rs) ? CAM_PRINT_BOTH : CAM_PRINT_TRACE,                  \
+		type, module_id, fmt, ##args);                                           \
+})
+
+#define CAM_LOG_RL(type, module_id, fmt, args...)                                        \
+CAM_LOG_RL_CUSTOM(type, module_id, DEFAULT_RATELIMIT_INTERVAL, DEFAULT_RATELIMIT_BURST,  \
+fmt, ##args)
+
+#define __CAM_DBG(module_id, priority, fmt, args...)                                              \
+({                                                                                                \
+	if (unlikely((debug_mdl & BIT_ULL(module_id)) && (priority >= debug_priority))) {         \
+		CAM_LOG(CAM_TYPE_DBG, module_id, fmt, ##args);                                    \
+	}                                                                                         \
+})
+
+/**
+ * CAM_ERR / CAM_WARN / CAM_INFO / CAM_TRACE
+ *
+ * @brief: Macros to print logs at respective level error/warn/info/trace. All
+ * logs except CAM_TRACE are printed in both log and trace buffers.
+ *
+ * @__module: Respective enum cam_debug_module_id
+ * @fmt:      Format string
+ * @args:     Arguments to match with format
+ */
+#define CAM_ERR(__module, fmt, args...)  CAM_LOG(CAM_TYPE_ERR, __module, fmt, ##args)
+#define CAM_WARN(__module, fmt, args...) CAM_LOG(CAM_TYPE_WARN, __module, fmt, ##args)
+#define CAM_INFO(__module, fmt, args...) CAM_LOG(CAM_TYPE_INFO, __module, fmt, ##args)
+#define CAM_TRACE(__module, fmt, args...) \
+__CAM_LOG(CAM_PRINT_TRACE, CAM_TYPE_TRACE, __module, fmt, ##args)
+
+/**
+ * CAM_ERR_RATE_LIMIT / CAM_WARN_RATE_LIMIT / CAM_INFO_RATE_LIMIT
+ *
+ * @brief: Rate limited version of logs used to reduce log spew.
+ *
+ * @__module: Respective enum cam_debug_module_id
+ * @fmt:      Format string
+ * @args:     Arguments to match with format
+ */
+#define CAM_ERR_RATE_LIMIT(__module, fmt, args...)  CAM_LOG_RL(CAM_TYPE_ERR, __module, fmt, ##args)
+#define CAM_WARN_RATE_LIMIT(__module, fmt, args...) CAM_LOG_RL(CAM_TYPE_WARN, __module, fmt, ##args)
+#define CAM_INFO_RATE_LIMIT(__module, fmt, args...) CAM_LOG_RL(CAM_TYPE_INFO, __module, fmt, ##args)
+
+/**
+ * CAM_ERR_RATE_LIMIT_CUSTOM / CAM_WARN_RATE_LIMITT_CUSTOM/ CAM_INFO_RATE_LIMITT_CUSTOM
+ *
+ * @brief: Rate limited version of logs used to reduce log spew that can have
+ * customized burst rate
+ *
+ * @__module: Respective enum cam_debug_module_id
+ * @interval: Sliding window interval in which to count logs
+ * @burst:    Maximum number of logs in the specified interval
+ * @fmt:      Format string
+ * @args:     Arguments to match with format
+ */
+#define CAM_ERR_RATE_LIMIT_CUSTOM(__module, interval, burst, fmt, args...)  \
+	CAM_LOG_RL_CUSTOM(CAM_TYPE_ERR, __module, interval, burst, fmt, ##args)
+
+#define CAM_WARN_RATE_LIMIT_CUSTOM(__module, interval, burst, fmt, args...) \
+	CAM_LOG_RL_CUSTOM(CAM_TYPE_WARN, __module, interval, burst, fmt, ##args)
+
 #define CAM_INFO_RATE_LIMIT_CUSTOM(__module, interval, burst, fmt, args...) \
-	({								\
-		static DEFINE_RATELIMIT_STATE(_rs,			\
-			(interval * HZ),				\
-			burst);						\
-		if (__ratelimit(&_rs))					\
-			pr_info("CAM_INFO: %s: %s: %d " fmt "\n",	\
-				cam_get_module_name(__module), __func__,\
-				__LINE__, ##args);			\
-	})
+	CAM_LOG_RL_CUSTOM(CAM_TYPE_INFO, __module, interval, burst, fmt, ##args)
 
 /*
  * CAM_DBG
- * @brief    :  This Macro will print debug logs when enabled using GROUP
+ * @brief    :  This Macro will print debug logs when enabled using GROUP and
+ *              if its priority is greater than the priority parameter
  *
  * @__module :  Respective module id which is been calling this Macro
  * @fmt      :  Formatted string which needs to be print in log
  * @args     :  Arguments which needs to be print in log
  */
-#define CAM_DBG(__module, fmt, args...)                            \
-	cam_debug_log(__module, __func__, __LINE__, fmt, ##args)
+#define CAM_DBG(__module, fmt, args...)     __CAM_DBG(__module, CAM_DBG_PRIORITY_0, fmt, ##args)
+#define CAM_DBG_PR1(__module, fmt, args...) __CAM_DBG(__module, CAM_DBG_PRIORITY_1, fmt, ##args)
+#define CAM_DBG_PR2(__module, fmt, args...) __CAM_DBG(__module, CAM_DBG_PRIORITY_2, fmt, ##args)
 
-/*
- * CAM_ERR_RATE_LIMIT
- * @brief    :  This Macro will print error print logs with ratelimit
- */
-#define CAM_ERR_RATE_LIMIT(__module, fmt, args...)                 \
-	pr_err_ratelimited("CAM_ERR: %s: %s: %d " fmt "\n",            \
-		cam_get_module_name(__module), __func__,  __LINE__, ##args)
-
-/*
- * CAM_ERR_RATE_LIMIT_CUSTOM
- * @brief    :  This Macro will print error logs with custom ratelimit
+/**
+ * cam_print_to_buffer
+ * @brief:         Function to print to camera logs to a buffer. Don't use directly. Use macros
+ *                 provided below.
  *
- * @__module :  Respective module id which is been calling this Macro
- * @interval :  Time interval in seconds
- * @burst    :  No of logs to print in interval time
- * @fmt      :  Formatted string which needs to be print in log
- * @args     :  Arguments which needs to be print in log
+ * @buf:           Buffer to print into
+ * @buf_size:      Total size of the buffer
+ * @len:           Pointer to variable used to keep track of the length
+ * @tag:           Log level tag to be prefixed
+ * @module_id:     Module id tag to be prefixed
+ * @fmt:           Formatted string which needs to be print in log
+ * @args:          Arguments which needs to be print in log
  */
-#define CAM_ERR_RATE_LIMIT_CUSTOM(__module, interval, burst, fmt, args...) \
-	({								\
-		static DEFINE_RATELIMIT_STATE(_rs,			\
-			(interval * HZ),				\
-			burst);						\
-		if (__ratelimit(&_rs))					\
-			pr_err("CAM_ERR: %s: %s: %d " fmt "\n",		\
-				cam_get_module_name(__module), __func__,\
-				__LINE__, ##args);			\
-	})
+void cam_print_to_buffer(char *buf, const size_t buf_size, size_t *len, unsigned int tag,
+	unsigned long long module_id, const char *fmt, ...);
+
+/**
+ * CAM_[ERR/WARN/INFO]_BUF
+ * @brief:         Macro to print a new line into log buffer.
+ *
+ * @module_id:     Module id tag to be prefixed
+ * @buf:           Buffer to print into
+ * @buf_size:      Total size of the buffer
+ * @len:           Pointer to the variable used to keep track of the length
+ * @fmt:           Formatted string which needs to be print in log
+ * @args:          Arguments which needs to be print in log
+ */
+#define CAM_ERR_BUF(module_id, buf, buf_size, len, fmt, args...)                                   \
+	cam_print_to_buffer(buf, buf_size, len, CAM_TYPE_ERR, module_id, fmt, ##args)
+#define CAM_WARN_BUF(module_id, buf, buf_size, len, fmt, args...)                                  \
+	cam_print_to_buffer(buf, buf_size, len, CAM_TYPE_WARN, module_id, fmt, ##args)
+#define CAM_INFO_BUF(module_id, buf, buf_size, len, fmt, args...)                                  \
+	cam_print_to_buffer(buf, buf_size, len, CAM_TYPE_INFO, module_id, fmt, ##args)
+
+#define CAM_BOOL_TO_YESNO(val) ((val) ? "Y" : "N")
+
+/**
+ * struct cam_cpas_debug_settings - Sysfs debug settings for cpas driver
+ */
+struct cam_cpas_debug_settings {
+	uint64_t mnoc_hf_0_ab_bw;
+	uint64_t mnoc_hf_0_ib_bw;
+	uint64_t mnoc_hf_1_ab_bw;
+	uint64_t mnoc_hf_1_ib_bw;
+	uint64_t mnoc_sf_0_ab_bw;
+	uint64_t mnoc_sf_0_ib_bw;
+	uint64_t mnoc_sf_1_ab_bw;
+	uint64_t mnoc_sf_1_ib_bw;
+	uint64_t mnoc_sf_icp_ab_bw;
+	uint64_t mnoc_sf_icp_ib_bw;
+	uint64_t camnoc_bw;
+};
+
+/**
+ * struct camera_debug_settings - Sysfs debug settings for camera
+ *
+ * @cpas_settings: Debug settings for cpas driver.
+ */
+struct camera_debug_settings {
+	struct cam_cpas_debug_settings cpas_settings;
+};
+
+/**
+ * @brief : API to get camera debug settings
+ * @return const struct camera_debug_settings pointer.
+ */
+const struct camera_debug_settings *cam_debug_get_settings(void);
+
+/**
+ * @brief : API to parse and store input from sysfs debug node
+ * @return Number of bytes read from buffer on success, or -EPERM on error.
+ */
+ssize_t cam_debug_sysfs_node_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count);
 
 #endif /* _CAM_DEBUG_UTIL_H_ */

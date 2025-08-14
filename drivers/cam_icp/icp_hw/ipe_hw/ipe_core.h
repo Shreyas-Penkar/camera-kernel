@@ -1,13 +1,6 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
  */
 
 #ifndef CAM_IPE_CORE_H
@@ -17,7 +10,9 @@
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
-#include <linux/dma-buf.h>
+
+/* IPE CDM/TOP status register */
+#define IPE_RST_DONE_IRQ_STATUS_BIT  0x1
 
 #define IPE_COLLAPSE_MASK 0x1
 #define IPE_PWR_ON_MASK   0x2
@@ -26,7 +21,13 @@ struct cam_ipe_device_hw_info {
 	uint32_t hw_idx;
 	uint32_t pwr_ctrl;
 	uint32_t pwr_status;
-	uint32_t reserved;
+
+	uint32_t top_rst_cmd;
+	uint32_t top_irq_status;
+	uint32_t cdm_rst_cmd;
+	uint32_t cdm_irq_status;
+
+	uint32_t cdm_rst_val;
 };
 
 struct cam_ipe_device_core_info {
@@ -44,4 +45,14 @@ int cam_ipe_process_cmd(void *device_priv, uint32_t cmd_type,
 	void *cmd_args, uint32_t arg_size);
 irqreturn_t cam_ipe_irq(int irq_num, void *data);
 
+/**
+ * @brief : API to register IPE hw to platform framework.
+ * @return struct platform_device pointer on on success, or ERR_PTR() on error.
+ */
+int cam_ipe_init_module(void);
+
+/**
+ * @brief : API to remove IPE Hw from platform framework.
+ */
+void cam_ipe_exit_module(void);
 #endif /* CAM_IPE_CORE_H */

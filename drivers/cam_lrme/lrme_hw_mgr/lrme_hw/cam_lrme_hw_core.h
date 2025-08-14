@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _CAM_LRME_HW_CORE_H_
@@ -26,7 +20,7 @@
 #include "cam_cdm_intf_api.h"
 #include "cam_lrme_hw_intf.h"
 #include "cam_lrme_hw_soc.h"
-#include "cam_req_mgr_workq.h"
+#include "cam_req_mgr_worker_wrapper.h"
 
 #define CAM_LRME_HW_RESET_TIMEOUT 3000
 
@@ -41,8 +35,10 @@
 #define CAM_LRME_FE_IRQ_MASK           0x0
 
 #define CAM_LRME_MAX_REG_PAIR_NUM 60
+
 #define CAM_LRME_RESPONSE_TIME_THRESHOLD 100000
-#define CAM_LRME_HW_DUMP_TAG_MAX_LEN 32
+#define CAM_LRME_HW_DUMP_TAG_MAX_LEN     32
+#define CAM_LRME_HW_DUMP_NUM_WORDS       5
 
 /**
  * enum cam_lrme_irq_set
@@ -132,7 +128,7 @@ struct cam_lrme_core {
 	struct cam_lrme_dev_cap           hw_caps;
 	enum cam_lrme_core_state          state;
 	struct completion                 reset_complete;
-	struct cam_req_mgr_core_workq    *work;
+	struct cam_req_mgr_core_worker    *work;
 	struct cam_lrme_hw_work_data      work_data[CAM_LRME_HW_WORKQ_NUM_TASK];
 	struct cam_lrme_hw_cmd_set_cb     hw_mgr_cb;
 	struct cam_lrme_frame_request    *req_proc;
@@ -450,9 +446,9 @@ struct cam_lrme_hw_info {
  */
 
 struct cam_lrme_hw_dump_header {
-	char     tag[CAM_LRME_HW_DUMP_TAG_MAX_LEN];
-	uint64_t size;
-	uint32_t word_size;
+	uint8_t     tag[CAM_LRME_HW_DUMP_TAG_MAX_LEN];
+	uint64_t    size;
+	uint32_t    word_size;
 };
 
 int cam_lrme_hw_process_irq(void *priv, void *data);

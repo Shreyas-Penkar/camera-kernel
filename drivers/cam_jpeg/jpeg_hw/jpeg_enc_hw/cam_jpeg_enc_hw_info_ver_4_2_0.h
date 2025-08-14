@@ -1,13 +1,6 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  */
 
 #ifndef CAM_JPEG_ENC_HW_INFO_TITAN170_H
@@ -65,7 +58,7 @@ static struct cam_jpeg_enc_device_hw_info cam_jpeg_enc_hw_info = {
 		.int_mask_disable_all = 0x00000000,
 		.int_mask_enable_all = 0xFFFFFFFF,
 		.hw_cmd_start = 0x00000001,
-		.reset_cmd = 0x00032093,
+		.reset_cmd = 0x200320D3,
 		.hw_cmd_stop = 0x00000002,
 	},
 	.int_status = {
@@ -77,7 +70,8 @@ static struct cam_jpeg_enc_device_hw_info cam_jpeg_enc_hw_info = {
 	.reg_dump = {
 		.start_offset = 0x0,
 		.end_offset = 0x33C,
-	}
+	},
+	.camnoc_misr_support = 0,
 };
 
 #endif /* CAM_JPEG_ENC_HW_INFO_TITAN170_H */

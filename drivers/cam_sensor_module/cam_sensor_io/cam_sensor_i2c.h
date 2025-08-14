@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _CAM_SENSOR_I2C_H_
@@ -15,7 +9,6 @@
 
 #include <linux/delay.h>
 #include <media/v4l2-subdev.h>
-#include <media/cam_sensor.h>
 #include <media/cam_sensor.h>
 #include "cam_cci_dev.h"
 #include "cam_sensor_io.h"
@@ -26,7 +19,7 @@
 #define I2C_COMPARE_MATCH 0
 #define I2C_COMPARE_MISMATCH 1
 
-#define I2C_REG_DATA_MAX       (8*1024)
+#define I2C_REG_DATA_MAX (20*1024)
 
 /**
  * @client: CCI client structure
@@ -64,8 +57,20 @@ int32_t cam_camera_cci_i2c_read_seq(struct cam_sensor_cci_client *client,
  * This API handles CCI random write
  */
 int32_t cam_cci_i2c_write_table(
-	struct cam_sensor_cci_client *client,
+	struct camera_io_master *client,
 	struct cam_sensor_i2c_reg_setting *write_setting);
+
+/**
+ * @client: CCI client structure
+ * @event_list:    event information
+ * @context_id:     context Id
+ *
+ * This API handles CCI random write
+ */
+int32_t cam_cci_event_write_table(
+	struct camera_io_master *client,
+	struct cam_sensor_event_list *event_list,
+	uint32_t context_id);
 
 /**
  * @client: CCI client structure
@@ -75,9 +80,31 @@ int32_t cam_cci_i2c_write_table(
  * This API handles CCI continuous write
  */
 int32_t cam_cci_i2c_write_continuous_table(
-	struct cam_sensor_cci_client *client,
+	struct camera_io_master *client,
 	struct cam_sensor_i2c_reg_setting *write_setting,
 	uint8_t cam_sensor_i2c_write_flag);
+
+/**
+ * @cci_client: CCI client structure
+ * @trigger_data: to receive the context id
+ * @cci_cmd: CCI command type
+ *
+ * Does I2C call to I2C functionalities
+ */
+int32_t cam_sensor_cci_get_contextid(struct cam_sensor_cci_client *cci_client,
+	struct cam_cci_trigger_data *trigger_data,
+	uint16_t cci_cmd);
+
+/**
+ * @cci_client: CCI client structure
+ * @cci_cmd: CCI command type
+ * @contextId:  context id
+ *
+ * Does I2C call to I2C functionalities
+ */
+int32_t cam_sensor_cci_release_contextid(struct cam_sensor_cci_client *cci_client,
+	uint16_t cci_cmd,
+	uint32_t contextId);
 
 /**
  * @cci_client: CCI client structure

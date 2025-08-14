@@ -1,13 +1,6 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2018, 2021, The Linux Foundation. All rights reserved.
  */
 
 #ifndef _CAM_JPEG_CONTEXT_H_
@@ -22,11 +15,13 @@
 
 /**
  * struct cam_jpeg_context - Jpeg context
- * @base: Base jpeg cam context object
- * @req_base: Common request structure
+ * @base      : Base jpeg cam context object
+ * @jpeg_req  : Jpeg reguest data stored during prepare update
+ * @req_base  : Common request structure
  */
 struct cam_jpeg_context {
 	struct cam_context *base;
+	struct cam_jpeg_request_data jpeg_req[CAM_CTX_REQ_MAX];
 	struct cam_ctx_request req_base[CAM_CTX_REQ_MAX];
 };
 
@@ -54,12 +49,14 @@ struct cam_jpeg_ctx_irq_ops {
  * @ctx_base: Context base from cam_context
  * @hw_intf: JPEG hw manager interface
  * @ctx_id: ID for this context
+ * @img_iommu_hdl: IOMMU HDL for image buffers
  *
  */
 int cam_jpeg_context_init(struct cam_jpeg_context *ctx,
 	struct cam_context *ctx_base,
 	struct cam_hw_mgr_intf *hw_intf,
-	uint32_t ctx_id);
+	uint32_t ctx_id,
+	int img_iommu_hdl);
 
 /**
  * cam_jpeg_context_deinit()

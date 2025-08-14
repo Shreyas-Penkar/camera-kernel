@@ -1,13 +1,6 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
  */
 
 #ifndef _CAM_ICP_CONTEXT_H_
@@ -26,7 +19,7 @@
 struct cam_icp_context {
 	struct cam_context *base;
 	struct cam_ctx_ops *state_machine;
-	struct cam_ctx_request req_base[CAM_CTX_REQ_MAX];
+	struct cam_ctx_request req_base[CAM_CTX_ICP_REQ_MAX];
 	uint32_t state;
 	void *ctxt_to_hw_map;
 };
@@ -36,9 +29,11 @@ struct cam_icp_context {
  * @ctx: Pointer to context
  * @hw_intf: Pointer to ICP hardware interface
  * @ctx_id: ID for this context
+ * @img_iommu_hdl: IOMMU HDL for image buffers
+ *
  */
 int cam_icp_context_init(struct cam_icp_context *ctx,
-	struct cam_hw_mgr_intf *hw_intf, uint32_t ctx_id);
+	struct cam_hw_mgr_intf *hw_intf, uint32_t ctx_id, int img_iommu_hdl);
 
 /**
  * cam_icp_context_deinit() - ICP context deinit

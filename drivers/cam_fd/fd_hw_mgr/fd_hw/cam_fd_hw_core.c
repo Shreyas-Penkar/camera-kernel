@@ -1,18 +1,13 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022, 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include "cam_fd_hw_core.h"
 #include "cam_fd_hw_soc.h"
 #include "cam_trace.h"
+#include "cam_common_util.h"
 
 #define CAM_FD_REG_VAL_PAIR_SIZE 256
 
@@ -124,8 +119,9 @@ static int cam_fd_hw_util_fdwrapper_sync_reset(struct cam_hw_info *fd_hw)
 	cam_fd_soc_register_write(soc_info, CAM_FD_REG_WRAPPER,
 		hw_static_info->wrapper_regs.sw_reset, 0x1);
 
-	time_left = wait_for_completion_timeout(&fd_core->reset_complete,
-		msecs_to_jiffies(CAM_FD_HW_HALT_RESET_TIMEOUT));
+	time_left = cam_common_wait_for_completion_timeout(
+			&fd_core->reset_complete,
+			msecs_to_jiffies(CAM_FD_HW_HALT_RESET_TIMEOUT));
 	if (time_left <= 0)
 		CAM_WARN(CAM_FD, "HW reset timeout time_left=%ld", time_left);
 
@@ -154,8 +150,9 @@ static int cam_fd_hw_util_fdwrapper_halt(struct cam_hw_info *fd_hw)
 	cam_fd_soc_register_write(soc_info, CAM_FD_REG_WRAPPER,
 		hw_static_info->wrapper_regs.hw_stop, 0x1);
 
-	time_left = wait_for_completion_timeout(&fd_core->halt_complete,
-		msecs_to_jiffies(CAM_FD_HW_HALT_RESET_TIMEOUT));
+	time_left = cam_common_wait_for_completion_timeout(
+			&fd_core->halt_complete,
+			msecs_to_jiffies(CAM_FD_HW_HALT_RESET_TIMEOUT));
 	if (time_left <= 0)
 		CAM_WARN(CAM_FD, "HW halt timeout time_left=%ld", time_left);
 
@@ -177,6 +174,7 @@ static int cam_fd_hw_util_processcmd_prestart(struct cam_hw_info *fd_hw,
 	uint32_t *cmd_buf_addr = prestart_args->cmd_buf_addr;
 	uint32_t reg_val_pair[CAM_FD_REG_VAL_PAIR_SIZE];
 	uint32_t num_cmds = 0;
+	uint32_t num_regval_pairs = 0;
 	int i;
 	struct cam_fd_hw_io_buffer *io_buf;
 	struct cam_fd_hw_req_private *req_private;
@@ -368,19 +366,25 @@ static int cam_fd_hw_util_processcmd_prestart(struct cam_hw_info *fd_hw,
 	ctx_hw_private->cdm_ops->cdm_write_changebase(cmd_buf_addr, mem_base);
 	cmd_buf_addr += size;
 	available_size -= (size * 4);
+	num_regval_pairs = num_cmds / 2;
 
-	size = ctx_hw_private->cdm_ops->cdm_required_size_reg_random(
-		num_cmds/2);
-	/* cdm util returns dwords, need to convert to bytes */
-	if ((size * 4) > available_size) {
-		CAM_ERR(CAM_FD, "Insufficient size:%d , expected size:%d",
-			available_size, size);
-		return -ENOMEM;
+	if (num_regval_pairs) {
+		size = ctx_hw_private->cdm_ops->cdm_required_size_reg_random(
+			num_regval_pairs);
+		/* cdm util returns dwords, need to convert to bytes */
+		if ((size * 4) > available_size) {
+			CAM_ERR(CAM_FD,
+				"Insufficient size:%d , expected size:%d",
+				available_size, size);
+			return -ENOMEM;
+		}
+		ctx_hw_private->cdm_ops->cdm_write_regrandom(cmd_buf_addr,
+			num_regval_pairs, reg_val_pair);
+		cmd_buf_addr += size;
+		available_size -= (size * 4);
+	} else {
+		CAM_DBG(CAM_FD, "No reg val pairs");
 	}
-	ctx_hw_private->cdm_ops->cdm_write_regrandom(cmd_buf_addr, num_cmds/2,
-		reg_val_pair);
-	cmd_buf_addr += size;
-	available_size -= (size * 4);
 
 	/* Update pre_config_buf_size in bytes */
 	prestart_args->pre_config_buf_size =
@@ -389,19 +393,27 @@ static int cam_fd_hw_util_processcmd_prestart(struct cam_hw_info *fd_hw,
 	/* Insert start trigger command into CDM as post config commands. */
 	num_cmds = cam_fd_cdm_write_reg_val_pair(reg_val_pair, 0,
 		hw_static_info->core_regs.control, 0x2);
-	size = ctx_hw_private->cdm_ops->cdm_required_size_reg_random(
-		num_cmds/2);
-	if ((size * 4) > available_size) {
-		CAM_ERR(CAM_FD, "Insufficient size:%d , expected size:%d",
-			available_size, size);
-		return -ENOMEM;
-	}
-	ctx_hw_private->cdm_ops->cdm_write_regrandom(cmd_buf_addr, num_cmds/2,
-		reg_val_pair);
-	cmd_buf_addr += size;
-	available_size -= (size * 4);
 
-	prestart_args->post_config_buf_size = size * 4;
+	num_regval_pairs = num_cmds / 2;
+
+	if (num_regval_pairs) {
+		size = ctx_hw_private->cdm_ops->cdm_required_size_reg_random(
+			num_regval_pairs);
+		if ((size * 4) > available_size) {
+			CAM_ERR(CAM_FD,
+				"Insufficient size:%d , expected size:%d",
+				available_size, size);
+			return -ENOMEM;
+		}
+		ctx_hw_private->cdm_ops->cdm_write_regrandom(cmd_buf_addr,
+			num_regval_pairs, reg_val_pair);
+		cmd_buf_addr += size;
+		available_size -= (size * 4);
+		prestart_args->post_config_buf_size = size * 4;
+	} else {
+		CAM_DBG(CAM_FD, "No reg val pairs");
+		prestart_args->post_config_buf_size = 0;
+	}
 
 	CAM_DBG(CAM_FD, "PreConfig [%pK %d], PostConfig[%pK %d]",
 		prestart_args->cmd_buf_addr, prestart_args->pre_config_buf_size,
@@ -523,18 +535,27 @@ static int cam_fd_hw_util_processcmd_frame_done(struct cam_hw_info *fd_hw,
 	return 0;
 }
 
-static int cam_fd_hw_util_processcmd_hw_dump(struct cam_hw_info *fd_hw,
-	void *args)
+static int cam_fd_hw_util_processcmd_hw_dump(
+	struct cam_hw_info *fd_hw,
+	void               *args)
 {
-	struct cam_fd_hw_dump_args *dump_args;
-	struct cam_hw_soc_info *soc_info;
-	int i, j;
-	char *dst;
-	uint32_t *addr, *start;
-	struct cam_fd_hw_dump_header *hdr;
-	uint32_t num_reg, min_len, remain_len;
+	int                            i, j;
+	uint8_t                       *dst;
+	uint32_t                      *addr, *start;
+	uint32_t                       num_reg, min_len;
+	uint64_t                       remain_len;
+	struct cam_hw_soc_info        *soc_info;
+	struct cam_fd_hw_dump_header  *hdr;
+	struct cam_fd_hw_dump_args    *dump_args;
+
+	if (!fd_hw || !args) {
+		CAM_ERR(CAM_FD, "Invalid args %pK %pK",
+			fd_hw, args);
+		return -EINVAL;
+	}
 
 	mutex_lock(&fd_hw->hw_mutex);
+
 	if (fd_hw->hw_state == CAM_HW_STATE_POWER_DOWN) {
 		CAM_INFO(CAM_FD, "power off state");
 		mutex_unlock(&fd_hw->hw_mutex);
@@ -543,24 +564,34 @@ static int cam_fd_hw_util_processcmd_hw_dump(struct cam_hw_info *fd_hw,
 
 	dump_args = (struct cam_fd_hw_dump_args *)args;
 	soc_info = &fd_hw->soc_info;
+
+	if (dump_args->buf_len <= dump_args->offset) {
+		CAM_WARN(CAM_FD, "dump offset overshoot len %zu offset %zu",
+			dump_args->buf_len, dump_args->offset);
+		mutex_unlock(&fd_hw->hw_mutex);
+		return -ENOSPC;
+	}
+
 	remain_len = dump_args->buf_len - dump_args->offset;
-	min_len =  2 * (sizeof(struct cam_fd_hw_dump_header) +
-		    CAM_FD_HW_DUMP_TAG_MAX_LEN) +
-		    soc_info->reg_map[0].size;
+	min_len =  sizeof(struct cam_fd_hw_dump_header) +
+		    soc_info->reg_map[0].size + sizeof(uint32_t);
+
 	if (remain_len < min_len) {
-		CAM_ERR(CAM_FD, "dump buffer exhaust %d %d",
+		CAM_WARN(CAM_FD, "dump buffer exhaust remain %zu min %u",
 			remain_len, min_len);
 		mutex_unlock(&fd_hw->hw_mutex);
-		return 0;
+		return -ENOSPC;
 	}
-	dst = (char *)dump_args->cpu_addr + dump_args->offset;
+
+	dst = (uint8_t *)dump_args->cpu_addr + dump_args->offset;
 	hdr = (struct cam_fd_hw_dump_header *)dst;
-	snprintf(hdr->tag, CAM_FD_HW_DUMP_TAG_MAX_LEN,
+	scnprintf(hdr->tag, CAM_FD_HW_DUMP_TAG_MAX_LEN,
 		"FD_REG:");
 	hdr->word_size = sizeof(uint32_t);
 	addr = (uint32_t *)(dst + sizeof(struct cam_fd_hw_dump_header));
 	start = addr;
 	*addr++ = soc_info->index;
+
 	for (j = 0; j < soc_info->num_reg_map; j++) {
 		num_reg = soc_info->reg_map[j].size/4;
 		for (i = 0; i < num_reg; i++) {
@@ -569,11 +600,12 @@ static int cam_fd_hw_util_processcmd_hw_dump(struct cam_hw_info *fd_hw,
 				(i*4));
 		}
 	}
+
 	mutex_unlock(&fd_hw->hw_mutex);
 	hdr->size = hdr->word_size * (addr - start);
 	dump_args->offset += hdr->size +
 		sizeof(struct cam_fd_hw_dump_header);
-	CAM_DBG(CAM_FD, "%d", dump_args->offset);
+	CAM_DBG(CAM_FD, "%zu", dump_args->offset);
 	return 0;
 }
 
@@ -734,10 +766,13 @@ int cam_fd_hw_init(void *hw_priv, void *init_hw_args, uint32_t arg_size)
 	fd_core->core_state = CAM_FD_CORE_STATE_IDLE;
 	spin_unlock_irqrestore(&fd_core->spin_lock, flags);
 
-	rc = cam_fd_hw_reset(hw_priv, NULL, 0);
-	if (rc) {
-		CAM_ERR(CAM_FD, "Reset Failed, rc=%d", rc);
-		goto disable_soc;
+	if (init_args->reset_required) {
+		rc = cam_fd_hw_reset(hw_priv, NULL, 0);
+		if (rc) {
+			CAM_ERR(CAM_FD, "Reset Failed, rc=%d", rc);
+			goto disable_soc;
+		}
+		init_args->is_hw_reset = true;
 	}
 
 	cam_fd_hw_util_enable_power_on_settings(fd_hw);
@@ -961,15 +996,18 @@ int cam_fd_hw_start(void *hw_priv, void *hw_start_args, uint32_t arg_size)
 
 		cdm_cmd->cmd_arrary_count = start_args->num_hw_update_entries;
 		cdm_cmd->type = CAM_CDM_BL_CMD_TYPE_MEM_HANDLE;
-		cdm_cmd->flag = false;
+		cdm_cmd->gen_irq_bl_done = false;
 		cdm_cmd->userdata = NULL;
 		cdm_cmd->cookie = 0;
+		cdm_cmd->gen_irq_arb = false;
+		cdm_cmd->irq_cb_intr_ctx = false;
 
 		for (i = 0 ; i <= start_args->num_hw_update_entries; i++) {
 			cmd = (start_args->hw_update_entries + i);
 			cdm_cmd->cmd[i].bl_addr.mem_handle = cmd->handle;
 			cdm_cmd->cmd[i].offset = cmd->offset;
 			cdm_cmd->cmd[i].len = cmd->len;
+			cdm_cmd->cmd[i].arbitrate = false;
 		}
 
 		rc = cam_cdm_submit_bls(ctx_hw_private->cdm_handle, cdm_cmd);
@@ -1093,6 +1131,7 @@ int cam_fd_hw_reserve(void *hw_priv, void *hw_reserve_args, uint32_t arg_size)
 	cdm_acquire.cam_cdm_callback = cam_fd_hw_util_cdm_callback;
 	cdm_acquire.id = CAM_CDM_VIRTUAL;
 	cdm_acquire.base_array_cnt = fd_hw->soc_info.num_reg_map;
+	cdm_acquire.priority = CAM_CDM_BL_FIFO_0;
 	for (i = 0; i < fd_hw->soc_info.num_reg_map; i++)
 		cdm_acquire.base_array[i] = &fd_hw->soc_info.reg_map[i];
 

@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _CAM_HFI_SESSION_DEFS_H
@@ -279,10 +273,20 @@ enum hfi_ipe_io_images {
 	IPE_OUTPUT_IMAGE_DS4_REF,
 	IPE_OUTPUT_IMAGE_DS16_REF,
 	IPE_OUTPUT_IMAGE_DS64_REF,
+	IPE_INPUT2_IMAGE_FULL,
+	IPE_INPUT2_IMAGE_DSX,
+	IPE_INPUT_OUTPUT_SCRATCHBUFFER,
 	IPE_INPUT_IMAGE_FIRST = IPE_INPUT_IMAGE_FULL,
 	IPE_INPUT_IMAGE_LAST = IPE_INPUT_IMAGE_DS64_REF,
+	IPE_INPUT_IMAGE_REF_FIRST = IPE_INPUT_IMAGE_FULL_REF,
+	IPE_INPUT_IMAGE_REF_LAST = IPE_INPUT_IMAGE_DS64_REF,
 	IPE_OUTPUT_IMAGE_FIRST = IPE_OUTPUT_IMAGE_DISPLAY,
 	IPE_OUTPUT_IMAGE_LAST = IPE_OUTPUT_IMAGE_DS64_REF,
+	IPE_OUTPUT_IMAGE_REF_FIRST = IPE_OUTPUT_IMAGE_FULL_REF,
+	IPE_OUTPUT_IMAGE_REF_LAST = IPE_OUTPUT_IMAGE_DS64_REF,
+	IPE_INPUT2_IMAGE_FIRST = IPE_INPUT2_IMAGE_FULL,
+	IPE_INPUT2_IMAGE_LAST = IPE_INPUT2_IMAGE_DSX,
+	IPE_INPUT_OUTPUT_IMAGE_LAST = IPE_INPUT_OUTPUT_SCRATCHBUFFER,
 	IPE_IO_IMAGES_MAX
 };
 
@@ -307,7 +311,6 @@ struct frame_buffer {
 } __packed;
 
 struct bps_frame_process_data {
-	struct frame_buffer buffers[BPS_IO_IMAGES_MAX];
 	uint32_t max_num_cores;
 	uint32_t target_time;
 	uint32_t ubwc_stats_buffer_addr;
@@ -318,6 +321,7 @@ struct bps_frame_process_data {
 	uint32_t strip_lib_out_addr;
 	uint32_t cdm_prog_addr;
 	uint32_t request_id;
+	struct frame_buffer buffers[BPS_IO_IMAGES_MAX];
 };
 
 enum hfi_ipe_image_format {
@@ -498,6 +502,11 @@ struct ipe_frame_process_data {
 	uint32_t cdm_tf_ds4;
 	uint32_t cdm_tf_ds16;
 	uint32_t cdm_tf_ds64;
+	uint32_t cdm_dsx_dc4;
+	uint32_t cdm_dsx_dc16;
+	uint32_t cdm_dsz_dc64;
+	uint32_t cdm_mfhdr_full_pass;
+	uint32_t cdm_mfhdr_dcx;
 	uint32_t request_id;
 	uint32_t frames_in_batch;
 	struct frame_set framesets[MAX_HFR_GROUP];
@@ -567,4 +576,23 @@ struct hfi_msg_ipe_frame_process {
 	uint64_t user_data;
 } __packed;
 
+/**
+ * struct hfi_cmd_synx_test_payload
+ *        Same struct used for cmd and response
+ *
+ * @size: Size of the pkt
+ * @pkt_type: pkt type (cmd/response)
+ * @input_size: Input buffer size
+ * @input_iova: Input buffer address
+ * @output_size: Output buffer size
+ * @output_iova: Output buffer address
+ */
+struct hfi_cmd_synx_test_payload {
+	uint32_t size;
+	uint32_t pkt_type;
+	uint32_t input_size;
+	uint32_t input_iova;
+	uint32_t output_size;
+	uint32_t output_iova;
+} __packed;
 #endif /* _CAM_HFI_SESSION_DEFS_H */

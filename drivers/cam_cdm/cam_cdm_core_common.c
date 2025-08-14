@@ -1,21 +1,13 @@
-/* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/module.h>
-#include <linux/ion.h>
-#include <linux/iommu.h>
 #include <linux/timer.h>
 #include <linux/kernel.h>
 
@@ -29,16 +21,20 @@
 
 static void cam_cdm_get_client_refcount(struct cam_cdm_client *client)
 {
-	mutex_lock(&client->lock);
+	unsigned long flags;
+
+	spin_lock_irqsave(&client->hw_lock, flags);
 	CAM_DBG(CAM_CDM, "CDM client get refcount=%d",
 		client->refcount);
 	client->refcount++;
-	mutex_unlock(&client->lock);
+	spin_unlock_irqrestore(&client->hw_lock, flags);
 }
 
 static void cam_cdm_put_client_refcount(struct cam_cdm_client *client)
 {
-	mutex_lock(&client->lock);
+	unsigned long flags;
+
+	spin_lock_irqsave(&client->hw_lock, flags);
 	CAM_DBG(CAM_CDM, "CDM client put refcount=%d",
 		client->refcount);
 	if (client->refcount > 0) {
@@ -47,15 +43,18 @@ static void cam_cdm_put_client_refcount(struct cam_cdm_client *client)
 		CAM_ERR(CAM_CDM, "Refcount put when zero");
 		WARN_ON(1);
 	}
-	mutex_unlock(&client->lock);
+	spin_unlock_irqrestore(&client->hw_lock, flags);
 }
 
 bool cam_cdm_set_cam_hw_version(
 	uint32_t ver, struct cam_hw_version *cam_version)
 {
 	switch (ver) {
-	case CAM_CDM170_VERSION:
-	case CAM_CDM175_VERSION:
+	case CAM_CDM100_VERSION:
+	case CAM_CDM110_VERSION:
+	case CAM_CDM120_VERSION:
+	case CAM_CDM200_VERSION:
+	case CAM_CDM210_VERSION:
 		cam_version->major    = (ver & 0xF0000000);
 		cam_version->minor    = (ver & 0xFFF0000);
 		cam_version->incr     = (ver & 0xFFFF);
@@ -84,8 +83,11 @@ struct cam_cdm_utils_ops *cam_cdm_get_ops(
 {
 	if (by_cam_version == false) {
 		switch (ver) {
-		case CAM_CDM170_VERSION:
-		case CAM_CDM175_VERSION:
+		case CAM_CDM100_VERSION:
+		case CAM_CDM110_VERSION:
+		case CAM_CDM120_VERSION:
+		case CAM_CDM200_VERSION:
+		case CAM_CDM210_VERSION:
 			return &CDM170_ops;
 		default:
 			CAM_ERR(CAM_CDM, "CDM Version=%x not supported in util",
@@ -97,6 +99,9 @@ struct cam_cdm_utils_ops *cam_cdm_get_ops(
 			(cam_version->incr == 0)) ||
 			((cam_version->major == 1) &&
 			(cam_version->minor == 1) &&
+			(cam_version->incr == 0)) ||
+			((cam_version->major == 1) &&
+			(cam_version->minor == 2) &&
 			(cam_version->incr == 0))) {
 
 			CAM_DBG(CAM_CDM,
@@ -176,6 +181,8 @@ void cam_cdm_notify_clients(struct cam_hw_info *cdm_hw,
 
 	if (status == CAM_CDM_CB_STATUS_BL_SUCCESS) {
 		int client_idx;
+		unsigned long flags;
+
 		struct cam_cdm_bl_cb_request_entry *node =
 			(struct cam_cdm_bl_cb_request_entry *)data;
 
@@ -187,6 +194,10 @@ void cam_cdm_notify_clients(struct cam_hw_info *cdm_hw,
 			return;
 		}
 		cam_cdm_get_client_refcount(client);
+		if (node->irq_cb_type == CAM_HW_CDM_IRQ_CB_INTERNAL)
+			spin_lock_irqsave(&client->hw_lock, flags);
+		else
+			mutex_lock(&client->lock);
 		if (client->data.cam_cdm_callback) {
 			CAM_DBG(CAM_CDM, "Calling client=%s cb cookie=%d",
 				client->data.identifier, node->cookie);
@@ -199,6 +210,42 @@ void cam_cdm_notify_clients(struct cam_hw_info *cdm_hw,
 			CAM_ERR(CAM_CDM, "No cb registered for client hdl=%x",
 				node->client_hdl);
 		}
+		if (node->irq_cb_type == CAM_HW_CDM_IRQ_CB_INTERNAL)
+			spin_unlock_irqrestore(&client->hw_lock, flags);
+		else
+			mutex_unlock(&client->lock);
+		cam_cdm_put_client_refcount(client);
+		return;
+	} else if (status == CAM_CDM_CB_STATUS_HW_RESET_DONE ||
+			status == CAM_CDM_CB_STATUS_HW_FLUSH ||
+			status == CAM_CDM_CB_STATUS_HW_RESUBMIT ||
+			status == CAM_CDM_CB_STATUS_INVALID_BL_CMD ||
+			status == CAM_CDM_CB_STATUS_HW_ERROR) {
+		int client_idx;
+		struct cam_cdm_bl_cb_request_entry *node =
+			(struct cam_cdm_bl_cb_request_entry *)data;
+
+		client_idx = CAM_CDM_GET_CLIENT_IDX(node->client_hdl);
+		client = core->clients[client_idx];
+		if ((!client) || (client->handle != node->client_hdl)) {
+			CAM_ERR(CAM_CDM, "Invalid client %pK hdl=%x", client,
+				node->client_hdl);
+			return;
+		}
+		cam_cdm_get_client_refcount(client);
+		mutex_lock(&client->lock);
+		if (client->data.cam_cdm_callback) {
+			client->data.cam_cdm_callback(
+				client->handle,
+				client->data.userdata,
+				status,
+				node->cookie);
+		} else {
+			CAM_ERR(CAM_CDM,
+				"No cb registered for client: name %s, hdl=%x",
+				client->data.identifier, client->handle);
+		}
+		mutex_unlock(&client->lock);
 		cam_cdm_put_client_refcount(client);
 		return;
 	}
@@ -206,6 +253,7 @@ void cam_cdm_notify_clients(struct cam_hw_info *cdm_hw,
 	for (i = 0; i < CAM_PER_CDM_MAX_REGISTERED_CLIENTS; i++) {
 		if (core->clients[i] != NULL) {
 			client = core->clients[i];
+			cam_cdm_get_client_refcount(client);
 			mutex_lock(&client->lock);
 			CAM_DBG(CAM_CDM, "Found client slot %d", i);
 			if (client->data.cam_cdm_callback) {
@@ -225,8 +273,41 @@ void cam_cdm_notify_clients(struct cam_hw_info *cdm_hw,
 					client->handle);
 			}
 			mutex_unlock(&client->lock);
+			cam_cdm_put_client_refcount(client);
 		}
 	}
+}
+
+static int cam_cdm_stream_handle_init(void *hw_priv, bool init)
+{
+	struct cam_hw_info *cdm_hw = hw_priv;
+	struct cam_cdm *core = NULL;
+	int rc = -EPERM;
+
+	core = (struct cam_cdm *)cdm_hw->core_info;
+
+	if (init) {
+		rc = cam_hw_cdm_init(hw_priv, NULL, 0);
+		if (rc) {
+			CAM_ERR(CAM_CDM, "CDM HW init failed");
+			return rc;
+		}
+
+		rc = cam_hw_cdm_alloc_genirq_mem(hw_priv);
+		if (rc) {
+			CAM_ERR(CAM_CDM, "Genirqalloc failed");
+			cam_hw_cdm_deinit(hw_priv, NULL, 0);
+		}
+	} else {
+		rc = cam_hw_cdm_deinit(hw_priv, NULL, 0);
+		if (rc)
+			CAM_ERR(CAM_CDM, "Deinit failed in streamoff");
+
+		if (cam_hw_cdm_release_genirq_mem(hw_priv))
+			CAM_ERR(CAM_CDM, "Genirq release fail");
+	}
+
+	return rc;
 }
 
 int cam_cdm_stream_ops_internal(void *hw_priv,
@@ -243,64 +324,58 @@ int cam_cdm_stream_ops_internal(void *hw_priv,
 		return -EINVAL;
 
 	core = (struct cam_cdm *)cdm_hw->core_info;
+	mutex_lock(&cdm_hw->hw_mutex);
 	client_idx = CAM_CDM_GET_CLIENT_IDX(*handle);
 	client = core->clients[client_idx];
 	if (!client) {
 		CAM_ERR(CAM_CDM, "Invalid client %pK hdl=%x", client, *handle);
+		mutex_unlock(&cdm_hw->hw_mutex);
 		return -EINVAL;
 	}
 	cam_cdm_get_client_refcount(client);
 	if (*handle != client->handle) {
 		CAM_ERR(CAM_CDM, "client id given handle=%x invalid", *handle);
-		cam_cdm_put_client_refcount(client);
-		return -EINVAL;
+		rc = -EINVAL;
+		goto end;
 	}
 	if (operation == true) {
 		if (true == client->stream_on) {
 			CAM_ERR(CAM_CDM,
 				"Invalid CDM client is already streamed ON");
-			cam_cdm_put_client_refcount(client);
-			return rc;
+			goto end;
 		}
 	} else {
 		if (client->stream_on == false) {
 			CAM_ERR(CAM_CDM,
 				"Invalid CDM client is already streamed Off");
-			cam_cdm_put_client_refcount(client);
-			return rc;
+			goto end;
 		}
 	}
 
-	mutex_lock(&cdm_hw->hw_mutex);
 	if (operation == true) {
 		if (!cdm_hw->open_count) {
 			struct cam_ahb_vote ahb_vote;
-			struct cam_axi_vote axi_vote;
-
-			if (core->id != CAM_CDM_VIRTUAL) {
-				rc = cam_soc_util_enable_platform_resource(
-						&cdm_hw->soc_info, true,
-						CAM_SVS_VOTE, true);
-				if (rc) {
-					CAM_ERR(CAM_CDM,
-						"Enable platform failed");
-					goto end;
-				}
-			}
-
-			CAM_DBG(CAM_CDM, "Enable soc done");
+			struct cam_axi_vote axi_vote = {0};
 
 			ahb_vote.type = CAM_VOTE_ABSOLUTE;
-			ahb_vote.vote.level = CAM_SVS_VOTE;
-			axi_vote.compressed_bw = CAM_CPAS_DEFAULT_AXI_BW;
-			axi_vote.compressed_bw_ab = CAM_CPAS_DEFAULT_AXI_BW;
-			axi_vote.uncompressed_bw = CAM_CPAS_DEFAULT_AXI_BW;
+			ahb_vote.vote.level = CAM_LOWSVS_D1_VOTE;
+			axi_vote.num_paths = 1;
+			axi_vote.axi_path[0].path_data_type =
+				CAM_AXI_PATH_DATA_ALL;
+			axi_vote.axi_path[0].transac_type =
+				CAM_AXI_TRANSACTION_READ;
+			axi_vote.axi_path[0].camnoc_bw =
+				CAM_CPAS_DEFAULT_AXI_BW;
+			axi_vote.axi_path[0].mnoc_ab_bw =
+				CAM_CPAS_DEFAULT_AXI_BW;
+			axi_vote.axi_path[0].mnoc_ib_bw =
+				CAM_CPAS_DEFAULT_AXI_BW;
 
 			rc = cam_cpas_start(core->cpas_handle,
 				&ahb_vote, &axi_vote);
 			if (rc != 0) {
 				CAM_ERR(CAM_CDM, "CPAS start failed");
-				goto disable_platform_resource;
+				goto end;
 			}
 			CAM_DBG(CAM_CDM, "CDM init first time");
 			if (core->id == CAM_CDM_VIRTUAL) {
@@ -309,19 +384,7 @@ int cam_cdm_stream_ops_internal(void *hw_priv,
 				rc = 0;
 			} else {
 				CAM_DBG(CAM_CDM, "CDM HW init first time");
-				rc = cam_hw_cdm_init(hw_priv, NULL, 0);
-				if (rc == 0) {
-					rc = cam_hw_cdm_alloc_genirq_mem(
-						hw_priv);
-					if (rc != 0) {
-						CAM_ERR(CAM_CDM,
-							"Genirqalloc failed");
-						cam_hw_cdm_deinit(hw_priv,
-							NULL, 0);
-					}
-				} else {
-					CAM_ERR(CAM_CDM, "CDM HW init failed");
-				}
+				rc = cam_cdm_stream_handle_init(hw_priv, true);
 			}
 			if (rc == 0) {
 				cdm_hw->open_count++;
@@ -350,17 +413,10 @@ int cam_cdm_stream_ops_internal(void *hw_priv,
 					rc = 0;
 				} else {
 					CAM_DBG(CAM_CDM, "CDM HW Deinit now");
-					rc = cam_hw_cdm_deinit(
-						hw_priv, NULL, 0);
-					if (cam_hw_cdm_release_genirq_mem(
-						hw_priv))
-						CAM_ERR(CAM_CDM,
-							"Genirq release fail");
+					rc = cam_cdm_stream_handle_init(hw_priv,
+						false);
 				}
-				if (rc) {
-					CAM_ERR(CAM_CDM,
-						"Deinit failed in streamoff");
-				} else {
+				if (rc == 0) {
 					client->stream_on = false;
 					rc = cam_cpas_stop(core->cpas_handle);
 					if (rc)
@@ -380,15 +436,6 @@ int cam_cdm_stream_ops_internal(void *hw_priv,
 			rc = -ENXIO;
 		}
 	}
-	goto end;
-
-disable_platform_resource:
-	if (core->id != CAM_CDM_VIRTUAL) {
-		if (cam_soc_util_disable_platform_resource(&cdm_hw->soc_info,
-				true, true))
-			CAM_ERR(CAM_CDM, "Disable platform resource failed");
-	}
-
 end:
 	cam_cdm_put_client_refcount(client);
 	mutex_unlock(&cdm_hw->hw_mutex);
@@ -461,7 +508,7 @@ int cam_cdm_process_cmd(void *hw_priv,
 			break;
 		}
 		cam_cdm_get_client_refcount(client);
-		if ((req->data->flag == true) &&
+		if (req->data->gen_irq_bl_done &&
 			(!client->data.cam_cdm_callback)) {
 			CAM_ERR(CAM_CDM,
 				"CDM request cb without registering cb");
@@ -497,6 +544,27 @@ int cam_cdm_process_cmd(void *hw_priv,
 		data = (struct cam_cdm_acquire_data *)cmd_args;
 		CAM_DBG(CAM_CDM, "Trying to acquire client=%s in hw idx=%d",
 			data->identifier, core->index);
+
+		if (data->priority >= CAM_CDM_BL_FIFO_MAX) {
+			mutex_unlock(&cdm_hw->hw_mutex);
+			CAM_ERR(CAM_CDM,
+				"Invalid priority requested %d",
+				data->priority);
+			rc = -EINVAL;
+			break;
+		}
+
+		if (core->id != CAM_CDM_VIRTUAL &&
+				core->bl_fifo[data->priority].bl_depth == 0) {
+			mutex_unlock(&cdm_hw->hw_mutex);
+			CAM_ERR(CAM_CDM,
+				"FIFO %d not supported for core %d",
+				data->priority,
+				core->id);
+			rc = -EINVAL;
+			break;
+		}
+
 		idx = cam_cdm_find_free_client_slot(core);
 		if ((idx < 0) || (core->clients[idx])) {
 			mutex_unlock(&cdm_hw->hw_mutex);
@@ -539,12 +607,14 @@ int cam_cdm_process_cmd(void *hw_priv,
 			data->cdm_version = core->version;
 		}
 
+		spin_lock_init(&client->hw_lock);
 		cam_cdm_get_client_refcount(client);
 		mutex_lock(&client->lock);
 		memcpy(&client->data, data,
 			sizeof(struct cam_cdm_acquire_data));
 		client->handle = CAM_CDM_CREATE_CLIENT_HANDLE(
 					core->index,
+					data->priority,
 					idx);
 		client->stream_on = false;
 		data->handle = client->handle;
@@ -593,8 +663,180 @@ int cam_cdm_process_cmd(void *hw_priv,
 		break;
 	}
 	case CAM_CDM_HW_INTF_CMD_RESET_HW: {
-		CAM_ERR(CAM_CDM, "CDM HW reset not supported for handle =%x",
-			*((uint32_t *)cmd_args));
+		uint32_t *handle = cmd_args;
+		int idx;
+		struct cam_cdm_client *client;
+
+		if (sizeof(uint32_t) != arg_size) {
+			CAM_ERR(CAM_CDM,
+				"Invalid CDM cmd %d size=%x for handle=%x",
+				cmd, arg_size, *handle);
+				return -EINVAL;
+		}
+		idx = CAM_CDM_GET_CLIENT_IDX(*handle);
+		mutex_lock(&cdm_hw->hw_mutex);
+		client = core->clients[idx];
+		if (!client) {
+			CAM_ERR(CAM_CDM,
+				"Client not present for handle %d",
+				*handle);
+			mutex_unlock(&cdm_hw->hw_mutex);
+			break;
+		}
+
+		if (*handle != client->handle) {
+			CAM_ERR(CAM_CDM,
+				"handle mismatch, client handle %d index %d received handle %d",
+				client->handle, idx, *handle);
+			mutex_unlock(&cdm_hw->hw_mutex);
+			break;
+		}
+		rc = cam_hw_cdm_reset_hw(cdm_hw, *handle);
+		if (rc) {
+			CAM_ERR(CAM_CDM,
+				"CDM HW reset failed for handle 0x%x rc = %d",
+				*handle, rc);
+		} else {
+			CAM_INFO_RATE_LIMIT(CAM_CDM,
+				"CDM HW reset done for handle 0x%x",
+				*handle);
+		}
+		mutex_unlock(&cdm_hw->hw_mutex);
+		break;
+	}
+	case CAM_CDM_HW_INTF_CMD_FLUSH_HW: {
+		uint32_t *handle = cmd_args;
+		int idx;
+		struct cam_cdm_client *client;
+
+		if (sizeof(uint32_t) != arg_size) {
+			CAM_ERR(CAM_CDM,
+				"Invalid CDM cmd %d size=%x for handle=%x",
+				cmd, arg_size, *handle);
+				return -EINVAL;
+		}
+		idx = CAM_CDM_GET_CLIENT_IDX(*handle);
+		mutex_lock(&cdm_hw->hw_mutex);
+		client = core->clients[idx];
+		if (!client) {
+			CAM_ERR(CAM_CDM,
+				"Client not present for handle %d",
+				*handle);
+		mutex_unlock(&cdm_hw->hw_mutex);
+		break;
+		}
+
+		if (*handle != client->handle) {
+			CAM_ERR(CAM_CDM,
+				"handle mismatch, client handle %d index %d received handle %d",
+				client->handle, idx, *handle);
+		mutex_unlock(&cdm_hw->hw_mutex);
+		break;
+		}
+
+		rc = cam_hw_cdm_flush_hw(cdm_hw, *handle);
+		if (rc) {
+			CAM_ERR(CAM_CDM,
+				"CDM HW flush failed for handle 0x%x rc = %d",
+				*handle, rc);
+		} else {
+			CAM_INFO_RATE_LIMIT(CAM_CDM,
+				"CDM HW flush done for handle 0x%x",
+				*handle);
+		}
+		mutex_unlock(&cdm_hw->hw_mutex);
+		break;
+	}
+	case CAM_CDM_HW_INTF_CMD_HANDLE_ERROR: {
+		uint32_t *handle = cmd_args;
+		int idx;
+		struct cam_cdm_client *client;
+
+		if (sizeof(uint32_t) != arg_size) {
+			CAM_ERR(CAM_CDM,
+				"Invalid CDM cmd %d size=%x for handle=%x",
+				cmd, arg_size, *handle);
+				return -EINVAL;
+		}
+
+		idx = CAM_CDM_GET_CLIENT_IDX(*handle);
+		mutex_lock(&cdm_hw->hw_mutex);
+		client = core->clients[idx];
+		if (!client) {
+			CAM_ERR(CAM_CDM,
+				"Client not present for handle %d",
+				*handle);
+			mutex_unlock(&cdm_hw->hw_mutex);
+			break;
+		}
+
+		if (*handle != client->handle) {
+			CAM_ERR(CAM_CDM,
+				"handle mismatch, client handle %d index %d received handle %d",
+				client->handle, idx, *handle);
+			mutex_unlock(&cdm_hw->hw_mutex);
+			break;
+		}
+
+		rc = cam_hw_cdm_handle_error(cdm_hw, *handle);
+		if (rc) {
+			CAM_ERR(CAM_CDM,
+				"CDM HW handle error failed for handle 0x%x rc = %d",
+				*handle, rc);
+		} else {
+			CAM_INFO_RATE_LIMIT(CAM_CDM,
+				"CDM HW handle error done for handle 0x%x",
+				*handle);
+		}
+
+		mutex_unlock(&cdm_hw->hw_mutex);
+		break;
+	}
+	case CAM_CDM_HW_INTF_CMD_HANG_DETECT: {
+		uint32_t *handle = cmd_args;
+		int idx;
+		struct cam_cdm_client *client;
+
+		if (sizeof(uint32_t) != arg_size) {
+			CAM_ERR(CAM_CDM,
+				"Invalid CDM cmd %d size=%x for handle=%x",
+				cmd, arg_size, *handle);
+				return -EINVAL;
+		}
+
+		idx = CAM_CDM_GET_CLIENT_IDX(*handle);
+		client = core->clients[idx];
+		if (!client) {
+			CAM_ERR(CAM_CDM,
+				"Client not present for handle %d",
+				*handle);
+			break;
+		}
+
+		if (*handle != client->handle) {
+			CAM_ERR(CAM_CDM,
+				"handle mismatch, client handle %d index %d received handle %d",
+				client->handle, idx, *handle);
+			break;
+		}
+
+		rc = cam_hw_cdm_hang_detect(cdm_hw, *handle);
+		break;
+	}
+	case CAM_CDM_HW_INTF_DUMP_DBG_REGS:
+	{
+		uint32_t *handle = cmd_args;
+
+		if (sizeof(uint32_t) != arg_size) {
+			CAM_ERR(CAM_CDM,
+				"Invalid CDM cmd %d size=%x for handle=0x%x",
+				cmd, arg_size, *handle);
+				return -EINVAL;
+		}
+
+		mutex_lock(&cdm_hw->hw_mutex);
+		cam_hw_cdm_dump_core_debug_registers(cdm_hw, true);
+		mutex_unlock(&cdm_hw->hw_mutex);
 		break;
 	}
 	default:

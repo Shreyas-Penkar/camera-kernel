@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include "cam_sensor_spi.h"
@@ -117,7 +111,8 @@ static int32_t cam_spi_tx_helper(struct camera_io_master *client,
 	uint32_t len, hlen;
 	uint8_t retries = client->spi_client->retries;
 	uint32_t txr = 0, rxr = 0;
-	struct page *page_tx = NULL, *page_rx = NULL;
+	void  *vaddr_tx = NULL;
+	void  *vaddr_rx = NULL;
 
 	hlen = cam_camera_spi_get_hlen(inst);
 	len = hlen + num_byte;
@@ -131,30 +126,32 @@ static int32_t cam_spi_tx_helper(struct camera_io_master *client,
 	if (tx) {
 		ctx = tx;
 	} else {
-		txr = PAGE_ALIGN(len) >> PAGE_SHIFT;
-		page_tx = cma_alloc(dev_get_cma_area(dev),
-			txr, 0, GFP_KERNEL);
-		if (!page_tx)
+		txr = len;
+		vaddr_tx = kzalloc(txr, GFP_KERNEL | GFP_DMA);
+		if (!vaddr_tx) {
+			CAM_ERR(CAM_SENSOR,
+				 "Fail to allocate Memory: len: %u", txr);
 			return -ENOMEM;
+		}
 
-		ctx = page_address(page_tx);
+		ctx = (char *)vaddr_tx;
 	}
 
 	if (num_byte) {
 		if (rx) {
 			crx = rx;
 		} else {
-			rxr = PAGE_ALIGN(len) >> PAGE_SHIFT;
-			page_rx = cma_alloc(dev_get_cma_area(dev),
-				rxr, 0, GFP_KERNEL);
-			if (!page_rx) {
+			rxr = len;
+			vaddr_rx = kzalloc(rxr, GFP_KERNEL | GFP_DMA);
+			if (!vaddr_rx) {
 				if (!tx)
-					cma_release(dev_get_cma_area(dev),
-						page_tx, txr);
-
+					kfree(vaddr_tx);
+				CAM_ERR(CAM_SENSOR,
+					"Fail to allocate memory: len: %u",
+					rxr);
 				return -ENOMEM;
 			}
-			crx = page_address(page_rx);
+			crx = (char *)vaddr_rx;
 		}
 	} else {
 		crx = NULL;
@@ -174,10 +171,14 @@ static int32_t cam_spi_tx_helper(struct camera_io_master *client,
 		memcpy(data, crx + hlen, num_byte);
 
 out:
-	if (!tx)
-		cma_release(dev_get_cma_area(dev), page_tx, txr);
-	if (!rx)
-		cma_release(dev_get_cma_area(dev), page_rx, rxr);
+	if (!tx) {
+		kfree(vaddr_tx);
+		vaddr_tx = NULL;
+	}
+	if (!rx) {
+		kfree(vaddr_rx);
+		vaddr_rx = NULL;
+	}
 	return rc;
 }
 
@@ -292,6 +293,8 @@ int32_t cam_spi_read_seq(struct camera_io_master *client,
 		return -EINVAL;
 	}
 
+	CAM_DBG(CAM_SENSOR, "Read Seq addr: 0x%x NB:%d",
+		addr, num_bytes);
 	return cam_spi_tx_helper(client,
 		&client->spi_client->cmd_tbl.read_seq, addr, data,
 		addr_type, num_bytes, NULL, NULL);
@@ -301,6 +304,8 @@ int cam_spi_query_id(struct camera_io_master *client,
 	uint32_t addr, enum camera_sensor_i2c_type addr_type,
 	uint8_t *data, uint32_t num_byte)
 {
+	CAM_DBG(CAM_SENSOR, "SPI Queryid : 0x%x, addr: 0x%x",
+		client->spi_client->cmd_tbl.query_id, addr);
 	return cam_spi_tx_helper(client,
 		&client->spi_client->cmd_tbl.query_id,
 		addr, data, addr_type, num_byte, NULL, NULL);

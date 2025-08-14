@@ -1,12 +1,15 @@
-ccflags-y += -I$(srctree)/techpack/ais/drivers/cam_core/
-ccflags-y += -I$(srctree)/techpack/ais/drivers/cam_smmu/
-ccflags-y += -I$(srctree)/techpack/ais/drivers/cam_utils
-ccflags-y += -I$(srctree)/techpack/ais/drivers/cam_req_mgr
+# SPDX-License-Identifier: GPL-2.0-only
 
-obj-$(CONFIG_MSM_AIS) += cam_req_mgr_core.o\
+ccflags-y += -I$(srctree)/techpack/camera/drivers/cam_core
+ccflags-y += -I$(srctree)/techpack/camera/drivers/cam_smmu/
+ccflags-y += -I$(srctree)/techpack/camera/drivers/cam_utils
+ccflags-y += -I$(srctree)/include/
+ccflags-y += -I$(srctree)/
+
+obj-$(CONFIG_SPECTRA_CAMERA) += cam_req_mgr_core.o\
 				cam_req_mgr_dev.o \
 				cam_req_mgr_util.o \
-				cam_req_mgr_workq.o \
+				cam_req_mgr_worker_wrapper.o \
 				cam_mem_mgr.o \
 				cam_req_mgr_timer.o \
 				cam_req_mgr_debug.o

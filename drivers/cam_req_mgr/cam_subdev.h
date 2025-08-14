@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _CAM_SUBDEV_H_
@@ -22,6 +16,31 @@
 #include <media/v4l2-ioctl.h>
 
 #define CAM_SUBDEVICE_EVENT_MAX 30
+
+enum cam_subdev_message_type_t {
+	CAM_SUBDEV_MESSAGE_REG_DUMP = 0x1,
+	CAM_SUBDEV_MESSAGE_APPLY_CSIPHY_AUX = 0x2,
+	CAM_SUBDEV_MESSAGE_PROBE_RES = 0x3,
+	CAM_SUBDEV_MESSAGE_START_SENSORLITE = 0x4,
+	CAM_SUBDEV_MESSAGE_SENSOR_SOF_NOTIFY = 0x5,
+	CAM_SUBDEV_MESSAGE_SENSOR_PAUSE = 0x6,
+	CAM_SUBDEV_MESSAGE_SENSOR_RESUME = 0x7,
+	CAM_SUBDEV_MESSAGE_SENSOR_QUERY_MCU = 0x8,
+	CAM_SUBDEV_MESSAGE_GET_CSID_CID = 0x9,
+	CAM_SUBDEV_MESSAGE_GET_SENSOR_PD = 0x10,
+};
+
+/* Enum for close sequence priority */
+enum cam_subdev_close_seq_priority {
+	CAM_SD_CLOSE_HIGH_PRIORITY,
+	CAM_SD_CLOSE_MEDIUM_PRIORITY,
+	CAM_SD_CLOSE_LOW_PRIORITY
+};
+
+enum cam_subdev_rwsem {
+	CAM_SUBDEV_LOCK = 1,
+	CAM_SUBDEV_UNLOCK,
+};
 
 /**
  * struct cam_subdev - describes a camera sub-device
@@ -41,6 +60,8 @@
  * @ent_function:          Media entity function type. Can be:
  *                             %CAM_IFE_DEVICE_TYPE - identifies as IFE device.
  *                             %CAM_ICP_DEVICE_TYPE - identifies as ICP device.
+ * @list:                  list pointer
+ * @close_seq_prior:         cam_subdev_close_seq_priority type
  *
  * Each instance of a subdev driver should create this struct, either
  * stand-alone or embedded in a larger struct. This structure should be
@@ -56,7 +77,27 @@ struct cam_subdev {
 	u32                                    sd_flags;
 	void                                  *token;
 	u32                                    ent_function;
+	void                                  (*msg_cb)(
+					struct v4l2_subdev *sd,
+					enum cam_subdev_message_type_t msg_type,
+					void *data);
+	struct list_head                       list;
+	enum cam_subdev_close_seq_priority     close_seq_prior;
 };
+
+/**
+ * cam_subdev_notify_message()
+ *
+ * @brief:  Notify message to a subdevs of specific type
+ *
+ * @subdev_type:           Subdev type
+ * @message_type:          message type
+ * @data:                  data to be delivered.
+ *
+ */
+void cam_subdev_notify_message(u32 subdev_type,
+		enum cam_subdev_message_type_t message_type,
+		void *data);
 
 /**
  * cam_subdev_probe()
@@ -82,15 +123,6 @@ int cam_subdev_probe(struct cam_subdev *sd, struct platform_device *pdev,
 int cam_subdev_remove(struct cam_subdev *sd);
 
 /**
- * cam_register_subdev_fops()
- *
- * @brief:   This common utility function assigns subdev ops
- *
- * @fops:    v4l file operations
- */
-void cam_register_subdev_fops(struct v4l2_file_operations *fops);
-
-/**
  * cam_register_subdev()
  *
  * @brief:   This is the common utility function to be called by each camera
@@ -111,5 +143,29 @@ int cam_register_subdev(struct cam_subdev *sd);
  * @sd:                    Pointer to struct cam_subdev.
  */
 int cam_unregister_subdev(struct cam_subdev *sd);
+
+/**
+ * cam_req_mgr_rwsem_read_op()
+ *
+ * @brief : API to acquire read semaphore lock to platform framework.
+ *
+ * @lock  : value indicates to lock or unlock the read lock
+ */
+void cam_req_mgr_rwsem_read_op(enum cam_subdev_rwsem lock);
+
+/**
+ * cam_req_mgr_is_open()
+ *
+ * @brief:    This common utility function returns the crm active status
+ *
+ */
+bool  cam_req_mgr_is_open(void);
+
+/**
+ * cam_req_mgr_is_shutdown()
+ *
+ * @brief:    This common utility function returns the shutdown state
+ */
+bool cam_req_mgr_is_shutdown(void);
 
 #endif /* _CAM_SUBDEV_H_ */

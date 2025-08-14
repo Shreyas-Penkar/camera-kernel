@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/slab.h>
@@ -43,7 +37,14 @@ static bool cam_vfe_cpas_cb(uint32_t client_handle, void *userdata,
 
 static int cam_vfe_get_dt_properties(struct cam_hw_soc_info *soc_info)
 {
-	int rc = 0;
+	int rc = 0, num_ubwc_cfg = 0, i = 0, num_pid = 0, num_ipcc_props;
+	struct device_node *of_node = NULL;
+	struct platform_device *pdev = NULL;
+	struct cam_vfe_soc_private *vfe_soc_private;
+
+	pdev = soc_info->pdev;
+	of_node = pdev->dev.of_node;
+	vfe_soc_private = soc_info->soc_private;
 
 	rc = cam_soc_util_get_dt_properties(soc_info);
 	if (rc) {
@@ -51,6 +52,84 @@ static int cam_vfe_get_dt_properties(struct cam_hw_soc_info *soc_info)
 		return rc;
 	}
 
+	rc = of_property_read_u32(of_node, "rt-wrapper-base", &vfe_soc_private->rt_wrapper_base);
+	if (rc) {
+		vfe_soc_private->rt_wrapper_base = 0;
+		CAM_DBG(CAM_ISP, "rc: %d Error reading rt_wrapper_base for core_idx: %u",
+			rc, soc_info->index);
+		rc = 0;
+	}
+
+	vfe_soc_private->is_ife_lite = false;
+	if (strnstr(soc_info->compatible, "lite", strlen(soc_info->compatible)) != NULL)
+		vfe_soc_private->is_ife_lite = true;
+
+	/* Check for pid info */
+	vfe_soc_private->num_pid = 0;
+	num_pid = of_property_count_u32_elems(pdev->dev.of_node, "cam_hw_pid");
+
+	if ((num_pid) > 0  && (num_pid <= CAM_ISP_HW_MAX_PID_VAL)) {
+		for (i = 0; i < num_pid; i++)
+			of_property_read_u32_index(pdev->dev.of_node, "cam_hw_pid", i,
+				&vfe_soc_private->pid[i]);
+
+		vfe_soc_private->num_pid = num_pid;
+		CAM_DBG(CAM_ISP, "VFE:%d pid count %d", soc_info->index, num_pid);
+	}
+
+	/* Check for ipcc info */
+	num_ipcc_props = of_property_count_u32_elems(pdev->dev.of_node, "ipcc_info");
+	vfe_soc_private->ipcc_info.ipcc_en = false;
+
+	vfe_soc_private->is_grp_support = false;
+	if (vfe_soc_private->is_ife_lite) {
+		vfe_soc_private->group_id = (CAM_ISP_HW_MAX_GROUP_IDX - 1);
+		rc = of_property_read_u32(of_node, "group-id",
+			&vfe_soc_private->group_id);
+		if (rc) {
+			CAM_DBG(CAM_ISP, "Error reading group_id for core_idx: %u rc %d",
+				soc_info->index, rc);
+
+			rc = 0;
+		} else
+			vfe_soc_private->is_grp_support = true;
+	}
+
+	num_pid = of_property_count_u32_elems(pdev->dev.of_node, "cam_hw_pid");
+	CAM_DBG(CAM_CPAS, "vfe:%d pid count %d", soc_info->index, num_pid);
+	if (num_ipcc_props == IPCC_INFO_CONFIG_MAX) {
+		of_property_read_u32_index(pdev->dev.of_node, "ipcc_info", 0,
+			&vfe_soc_private->ipcc_info.ipcc_client_id);
+
+		of_property_read_u32_index(pdev->dev.of_node, "ipcc_info", 1,
+			&vfe_soc_private->ipcc_info.ipcc_protocol_id);
+
+		of_property_read_u32_index(pdev->dev.of_node, "ipcc_info", 2,
+			&vfe_soc_private->ipcc_info.ipcc_dest_client_id);
+
+		vfe_soc_private->ipcc_info.ipcc_en = true;
+		CAM_DBG(CAM_ISP, "VFE: %d ipcc client_id: %u protocol: %u dest_id: %u",
+			soc_info->index, vfe_soc_private->ipcc_info.ipcc_client_id,
+			vfe_soc_private->ipcc_info.ipcc_protocol_id,
+			vfe_soc_private->ipcc_info.ipcc_dest_client_id);
+	}
+
+	/* Continue only for full cores */
+	if (vfe_soc_private->is_ife_lite)
+		goto end;
+
+	/* Check for ubwc config */
+	num_ubwc_cfg = of_property_count_u32_elems(of_node, "ubwc-static-cfg");
+	if ((num_ubwc_cfg > 0) && (num_ubwc_cfg <= UBWC_STATIC_CONFIG_MAX)) {
+		for (i = 0; i < num_ubwc_cfg; i++) {
+			rc = of_property_read_u32_index(of_node,
+				"ubwc-static-cfg", i, &vfe_soc_private->ubwc_static_ctrl[i]);
+			if (rc < 0)
+				CAM_ERR(CAM_ISP, "unable to read ubwc static config");
+		}
+	}
+
+end:
 	return rc;
 }
 
@@ -59,12 +138,19 @@ static int cam_vfe_request_platform_resource(
 	irq_handler_t vfe_irq_handler, void *irq_data)
 {
 	int rc = 0;
+	struct cam_cpas_global_timer_info g_timer = {0};
 
 	rc = cam_soc_util_request_platform_resource(soc_info, vfe_irq_handler,
 		irq_data);
 	if (rc)
 		CAM_ERR(CAM_ISP,
 			"Error! Request platform resource failed rc=%d", rc);
+
+	rc = cam_cpas_get_global_timer_info(&g_timer);
+	if (rc != 0)
+		CAM_ERR(CAM_ISP, "Failed to get global timer info");
+	else
+		soc_info->global_timer_mem_base = g_timer.mem_base;
 
 	return rc;
 }
@@ -96,18 +182,23 @@ int cam_vfe_init_soc_resources(struct cam_hw_soc_info *soc_info,
 	}
 	soc_info->soc_private = soc_private;
 
+	rc = cam_cpas_get_cpas_hw_version(&soc_private->cpas_version);
+	if (rc) {
+		CAM_ERR(CAM_ISP, "Error! Invalid cpas version rc=%d", rc);
+		goto free_soc_private;
+	}
+	soc_info->hw_version = soc_private->cpas_version;
+
 	rc = cam_vfe_get_dt_properties(soc_info);
 	if (rc < 0) {
 		CAM_ERR(CAM_ISP, "Error! Get DT properties failed rc=%d", rc);
 		goto free_soc_private;
 	}
 
-	rc = cam_soc_util_get_option_clk_by_name(soc_info,
-		CAM_VFE_DSP_CLK_NAME, &soc_private->dsp_clk,
-		&soc_private->dsp_clk_index, &soc_private->dsp_clk_rate);
+	rc = cam_soc_util_get_option_clk_by_name(soc_info, CAM_VFE_DSP_CLK_NAME,
+		&soc_private->dsp_clk_index);
 	if (rc)
-		/* failure expected as dsp clk is not used for now */
-		CAM_INFO(CAM_ISP, "Option clk get failed with rc %d", rc);
+		CAM_DBG(CAM_ISP, "Option clk get failed with rc %d", rc);
 
 	rc = cam_vfe_request_platform_resource(soc_info, vfe_irq_handler,
 		irq_data);
@@ -118,55 +209,18 @@ int cam_vfe_init_soc_resources(struct cam_hw_soc_info *soc_info,
 	}
 
 	memset(&cpas_register_param, 0, sizeof(cpas_register_param));
-
+	strlcpy(cpas_register_param.identifier, "ife",
+		CAM_HW_IDENTIFIER_LENGTH);
 	cpas_register_param.cell_index = soc_info->index;
 	cpas_register_param.dev = soc_info->dev;
 	cpas_register_param.cam_cpas_client_cb = cam_vfe_cpas_cb;
 	cpas_register_param.userdata = soc_info;
-
-	rc = cam_cpas_get_cpas_hw_version(&soc_private->cpas_version);
+	rc = cam_cpas_register_client(&cpas_register_param);
 	if (rc) {
-		CAM_ERR(CAM_ISP, "Error! Invalid cpas version rc=%d", rc);
-		goto free_soc_private;
-	}
-
-	switch (soc_private->cpas_version) {
-	case CAM_CPAS_TITAN_175_V120:
-		strlcpy(cpas_register_param.identifier, "iferdi",
-			CAM_HW_IDENTIFIER_LENGTH);
-		rc = cam_cpas_register_client(&cpas_register_param);
-		if (rc) {
-			CAM_ERR(CAM_ISP, "rdi CPAS registration failed rc=%d",
-				rc);
-			goto release_soc;
-		} else {
-			soc_private->cpas_handle[0] =
-				cpas_register_param.client_handle;
-		}
-
-		strlcpy(cpas_register_param.identifier, "ifenrdi",
-			CAM_HW_IDENTIFIER_LENGTH);
-		rc = cam_cpas_register_client(&cpas_register_param);
-		if (rc) {
-			CAM_ERR(CAM_ISP, "nrdi CPAS registration failed rc=%d",
-				rc);
-			goto release_soc;
-		} else {
-			soc_private->cpas_handle[1] =
-				cpas_register_param.client_handle;
-		}
-		break;
-	default:
-		strlcpy(cpas_register_param.identifier, "ife",
-			CAM_HW_IDENTIFIER_LENGTH);
-		rc = cam_cpas_register_client(&cpas_register_param);
-		if (rc) {
-			CAM_ERR(CAM_ISP, "CPAS registration failed rc=%d", rc);
-			goto release_soc;
-		} else {
-			soc_private->cpas_handle[0] =
-				cpas_register_param.client_handle;
-		}
+		CAM_ERR(CAM_ISP, "CPAS registration failed rc=%d", rc);
+		goto release_soc;
+	} else {
+		soc_private->cpas_handle = cpas_register_param.client_handle;
 	}
 	return rc;
 
@@ -193,27 +247,23 @@ int cam_vfe_deinit_soc_resources(struct cam_hw_soc_info *soc_info)
 		CAM_ERR(CAM_ISP, "Error! soc_private NULL");
 		return -ENODEV;
 	}
-	rc = cam_cpas_unregister_client(soc_private->cpas_handle[0]);
-	if (rc)
-		CAM_ERR(CAM_ISP, "CPAS0 unregistration failed rc=%d", rc);
 
-	if (!rc && soc_private->cpas_version == CAM_CPAS_TITAN_175_V120) {
-		rc = cam_cpas_unregister_client(soc_private->cpas_handle[1]);
-		if (rc)
-			CAM_ERR(CAM_ISP, "CPAS1 unregistration failed rc=%d",
-				rc);
-	}
+	rc = cam_cpas_unregister_client(soc_private->cpas_handle);
+	if (rc)
+		CAM_ERR(CAM_ISP, "CPAS unregistration failed rc=%d", rc);
 
 	rc = cam_vfe_release_platform_resource(soc_info);
 	if (rc < 0)
 		CAM_ERR(CAM_ISP,
 			"Error! Release platform resources failed rc=%d", rc);
 
-	rc = cam_soc_util_clk_put(&soc_private->dsp_clk);
-	if (rc < 0)
-		CAM_ERR(CAM_ISP,
-			"Error Put dsp clk failed rc=%d", rc);
-
+	if (soc_private->dsp_clk_index != -1) {
+		rc = cam_soc_util_put_optional_clk(soc_info,
+			soc_private->dsp_clk_index);
+		if (rc)
+			CAM_ERR(CAM_ISP,
+				"Error Put dsp clk failed rc=%d", rc);
+	}
 	kfree(soc_private);
 
 	return rc;
@@ -224,7 +274,7 @@ int cam_vfe_enable_soc_resources(struct cam_hw_soc_info *soc_info)
 	int                               rc = 0;
 	struct cam_vfe_soc_private       *soc_private;
 	struct cam_ahb_vote               ahb_vote;
-	struct cam_axi_vote               axi_vote;
+	struct cam_axi_vote               axi_vote = {0};
 
 	if (!soc_info) {
 		CAM_ERR(CAM_ISP, "Error! Invalid params");
@@ -233,43 +283,41 @@ int cam_vfe_enable_soc_resources(struct cam_hw_soc_info *soc_info)
 	}
 	soc_private = soc_info->soc_private;
 
-	rc = cam_soc_util_enable_platform_resource(soc_info, true,
-		CAM_TURBO_VOTE, true);
+	ahb_vote.type       = CAM_VOTE_ABSOLUTE;
+	ahb_vote.vote.level = CAM_LOWSVS_D1_VOTE;
+	axi_vote.num_paths = 1;
+	if (strnstr(soc_info->compatible, "lite",
+		strlen(soc_info->compatible))) {
+		axi_vote.axi_path[0].path_data_type =
+			CAM_AXI_PATH_DATA_IFE_RDI1;
+	} else {
+		axi_vote.axi_path[0].path_data_type =
+			CAM_AXI_PATH_DATA_IFE_VID;
+	}
+
+	axi_vote.axi_path[0].transac_type = CAM_AXI_TRANSACTION_WRITE;
+	axi_vote.axi_path[0].camnoc_bw = CAM_CPAS_DEFAULT_RT_AXI_BW;
+	axi_vote.axi_path[0].mnoc_ab_bw = CAM_CPAS_DEFAULT_RT_AXI_BW;
+	axi_vote.axi_path[0].mnoc_ib_bw = CAM_CPAS_DEFAULT_RT_AXI_BW;
+
+	rc = cam_cpas_start(soc_private->cpas_handle, &ahb_vote, &axi_vote);
 	if (rc) {
-		CAM_ERR(CAM_ISP, "Error! enable platform failed rc=%d", rc);
+		CAM_ERR(CAM_ISP, "Error! CPAS start failed rc=%d", rc);
+		rc = -EFAULT;
 		goto end;
 	}
 
-	ahb_vote.type       = CAM_VOTE_ABSOLUTE;
-	ahb_vote.vote.level = CAM_SVS_VOTE;
-
-	axi_vote.compressed_bw   = 10640000000L;
-	axi_vote.compressed_bw_ab   = 10640000000L;
-	axi_vote.uncompressed_bw = 10640000000L;
-
-	rc = cam_cpas_start(soc_private->cpas_handle[0], &ahb_vote, &axi_vote);
+	rc = cam_soc_util_enable_platform_resource(soc_info, true,
+		soc_info->lowest_clk_level, true);
 	if (rc) {
-		CAM_ERR(CAM_ISP, "Error! CPAS0 start failed rc=%d", rc);
-		rc = -EFAULT;
-		goto disable_platform_resource;
+		CAM_ERR(CAM_ISP, "Error! enable platform failed rc=%d", rc);
+		goto stop_cpas;
 	}
 
-	if (!rc && soc_private->cpas_version == CAM_CPAS_TITAN_175_V120) {
-		rc = cam_cpas_start(soc_private->cpas_handle[1], &ahb_vote,
-			&axi_vote);
-		if (rc) {
-			CAM_ERR(CAM_ISP, "Error! CPAS1 start failed rc=%d", rc);
-			rc = -EFAULT;
-			goto disable_platform_resource;
-		}
-	}
+	return rc;
 
-	goto end;
-
-disable_platform_resource:
-	if (cam_soc_util_disable_platform_resource(soc_info, true, true))
-		CAM_ERR(CAM_ISP, "Disable platform resource failed");
-
+stop_cpas:
+	cam_cpas_stop(soc_private->cpas_handle);
 end:
 	return rc;
 }
@@ -283,18 +331,26 @@ int cam_vfe_soc_enable_clk(struct cam_hw_soc_info *soc_info,
 	if (!soc_info) {
 		CAM_ERR(CAM_ISP, "Error Invalid params");
 		rc = -EINVAL;
-		return rc;
+		goto end;
 	}
 	soc_private = soc_info->soc_private;
 
-	if (strcmp(clk_name, CAM_VFE_DSP_CLK_NAME) == 0) {
-		rc = cam_soc_util_clk_enable(soc_private->dsp_clk,
-			CAM_VFE_DSP_CLK_NAME, soc_private->dsp_clk_rate);
+	if (!strcmp(clk_name, CAM_VFE_DSP_CLK_NAME)) {
+		if (soc_private->dsp_clk_index == -1) {
+			CAM_ERR(CAM_ISP,
+			"DSP clock not supported for vfe: %d", soc_info->index);
+			rc = -EPERM;
+			goto end;
+		}
+
+		rc = cam_soc_util_clk_enable(soc_info, true,
+			soc_private->dsp_clk_index, 0, NULL);
 		if (rc)
 			CAM_ERR(CAM_ISP,
 			"Error enable dsp clk failed rc=%d", rc);
 	}
 
+end:
 	return rc;
 }
 
@@ -307,18 +363,26 @@ int cam_vfe_soc_disable_clk(struct cam_hw_soc_info *soc_info,
 	if (!soc_info) {
 		CAM_ERR(CAM_ISP, "Error Invalid params");
 		rc = -EINVAL;
-		return rc;
+		goto end;
 	}
 	soc_private = soc_info->soc_private;
 
-	if (strcmp(clk_name, CAM_VFE_DSP_CLK_NAME) == 0) {
-		rc = cam_soc_util_clk_disable(soc_private->dsp_clk,
-			CAM_VFE_DSP_CLK_NAME);
+	if (!strcmp(clk_name, CAM_VFE_DSP_CLK_NAME)) {
+		if (soc_private->dsp_clk_index == -1) {
+			CAM_ERR(CAM_ISP,
+			"DSP clock not supported for vfe: %d", soc_info->index);
+			rc = -EPERM;
+			goto end;
+		}
+
+		rc = cam_soc_util_clk_disable(soc_info, true,
+			soc_private->dsp_clk_index);
 		if (rc)
 			CAM_ERR(CAM_ISP,
-			"Error enable dsp clk failed rc=%d", rc);
+			"Error disable dsp clk failed rc=%d", rc);
 	}
 
+end:
 	return rc;
 }
 
@@ -341,18 +405,10 @@ int cam_vfe_disable_soc_resources(struct cam_hw_soc_info *soc_info)
 		return rc;
 	}
 
-	rc = cam_cpas_stop(soc_private->cpas_handle[0]);
+	rc = cam_cpas_stop(soc_private->cpas_handle);
 	if (rc) {
 		CAM_ERR(CAM_ISP, "Error! CPAS stop failed rc=%d", rc);
 		return rc;
-	}
-
-	if (!rc && soc_private->cpas_version == CAM_CPAS_TITAN_175_V120) {
-		rc = cam_cpas_stop(soc_private->cpas_handle[1]);
-		if (rc) {
-			CAM_ERR(CAM_ISP, "Error! CPAS stop failed rc=%d", rc);
-			return rc;
-		}
 	}
 
 	return rc;

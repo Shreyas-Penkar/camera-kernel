@@ -1,77 +1,30 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# Makefile for use with Android's kernel/build system
 
-# auto-detect subdirs
-ifeq ($(CONFIG_ARCH_KONA), y)
-include $(srctree)/techpack/camera/config/konacamera.conf
-endif
+KBUILD_OPTIONS += CAMERA_KERNEL_ROOT=$(shell pwd)
+KBUILD_OPTIONS += KERNEL_ROOT=$(ROOT_DIR)/$(KERNEL_DIR)
+KBUILD_OPTIONS += MODNAME=camera
+KBUILD_OPTIONS += STAGING_INCDIR=$(STAGING_INCDIR)
 
-ifeq ($(CONFIG_ARCH_LITO), y)
-include $(srctree)/techpack/camera/config/litocamera.conf
-endif
+all: modules
 
-ifeq ($(CONFIG_ARCH_BENGAL), y)
-include $(srctree)/techpack/camera/config/bengalcamera.conf
-endif
+CAMERA_COMPILE_TIME = $(shell date)
+CAMERA_COMPILE_BY = $(shell whoami | sed 's/\\/\\\\/')
+CAMERA_COMPILE_HOST = $(shell uname -n)
 
-ifeq ($(CONFIG_ARCH_LAHAINA), y)
-include $(srctree)/techpack/camera/config/lahainacamera.conf
-endif
+cam_generated_h: $(shell find . -iname "*.c") $(shell find . -iname "*.h") $(shell find . -iname "*.mk")
+	echo '#define CAMERA_COMPILE_TIME "$(CAMERA_COMPILE_TIME)"' > cam_generated_h
+	echo '#define CAMERA_COMPILE_BY "$(CAMERA_COMPILE_BY)"' >> cam_generated_h
+	echo '#define CAMERA_COMPILE_HOST "$(CAMERA_COMPILE_HOST)"' >> cam_generated_h
 
-ifeq ($(CONFIG_ARCH_KONA), y)
-LINUXINCLUDE    += \
-		-include $(srctree)/techpack/camera/config/konacameraconf.h
-endif
+modules: cam_generated_h
+	$(MAKE) -C $(KERNEL_SRC) M=$(M) modules $(KBUILD_OPTIONS)
 
-ifeq ($(CONFIG_ARCH_LITO), y)
-LINUXINCLUDE    += \
-		-include $(srctree)/techpack/camera/config/litocameraconf.h
-endif
+modules_install:
+	$(MAKE) M=$(M) -C $(KERNEL_SRC) modules_install
 
-ifeq ($(CONFIG_ARCH_BENGAL), y)
-LINUXINCLUDE    += \
-		-include $(srctree)/techpack/camera/config/bengalcameraconf.h
-endif
+clean:
+	rm -f *.o *.ko *.mod.c *.mod.o *~ .*.cmd Module.symvers
+	rm -rf .tmp_versions
 
-ifeq ($(CONFIG_ARCH_LAHAINA), y)
-LINUXINCLUDE    += \
-		-include $(srctree)/techpack/camera/config/lahainacameraconf.h
-endif
-
-
-ifeq (y, $(findstring y, $(CONFIG_ARCH_SA8155) $(CONFIG_ARCH_SA6155) $(CONFIG_ARCH_SA8195)))
-include $(srctree)/techpack/ais/config/hanacamera.conf
-endif
-
-ifeq (y, $(findstring y, $(CONFIG_ARCH_SA8155) $(CONFIG_ARCH_SA6155) $(CONFIG_ARCH_SA8195)))
-LINUXINCLUDE += \
-		-include $(srctree)/techpack/ais/config/hanacameraconf.h
-endif
-
-ifeq ($(CONFIG_QTI_QUIN_GVM), y)
-include $(srctree)/techpack/ais/config/hanagvmcamera.conf
-endif
-
-ifeq ($(CONFIG_QTI_QUIN_GVM), y)
-LINUXINCLUDE += \
-		-include $(srctree)/techpack/ais/config/hanagvmcameraconf.h
-endif
-
-
-ifeq (y, $(findstring y, $(CONFIG_MSM_AIS) $(CONFIG_V4L2_LOOPBACK_V2)))
-# Use USERINCLUDE when you must reference the UAPI directories only.
-USERINCLUDE = -I$(srctree)/techpack/ais/include/uapi/ais
-
-# Use LINUXINCLUDE when you must reference the include/ directory.
-# Needed to be compatible with the O= option
-LINUXINCLUDE += \
-                -I$(srctree)/techpack/ais/include/uapi/ais \
-                -I$(srctree)/techpack/ais/include \
-                -I$(srctree) \
-                -I$(srctree)/include
-obj-y += drivers/
-
-else
-$(info Target not found)
-endif
-
-
+headers_install:
+	$(MAKE) -C $(KERNEL_SRC) M=$(M) headers_install $(KBUILD_OPTIONS)

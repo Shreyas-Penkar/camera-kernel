@@ -1,13 +1,7 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2017-2019, 2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _HFI_DEFS_H_
@@ -74,6 +68,32 @@
 #define HFI_CMD_SYS_PING               (HFI_CMD_COMMON_START + 0x5)
 #define HFI_CMD_SYS_RESET              (HFI_CMD_COMMON_START + 0x6)
 
+/* General Frame process errors */
+#define CAMERAICP_SUCCESS              0
+#define CAMERAICP_EFAILED              1
+#define CAMERAICP_ENOMEMORY            2
+#define CAMERAICP_EBADSTATE            3
+#define CAMERAICP_EBADPARM             4
+#define CAMERAICP_EBADITEM             5
+#define CAMERAICP_EINVALIDFORMAT       6
+#define CAMERAICP_EUNSUPPORTED         7
+#define CAMERAICP_EOUTOFBOUND          8
+#define CAMERAICP_ETIMEDOUT            9
+#define CAMERAICP_EABORTED             10
+#define CAMERAICP_EHWVIOLATION         11
+#define CAMERAICP_ECDMERROR            12
+
+/* HFI Specific errors. */
+#define CAMERAICP_HFI_ERR_COMMAND_SIZE 1000
+#define CAMERAICP_HFI_ERR_MESSAGE_SIZE 1001
+#define CAMERAICP_HFI_QUEUE_EMPTY      1002
+#define CAMERAICP_HFI_QUEUE_FULL       1003
+
+/* HFI Specified cores*/
+#define HW_CORE_IPE 0
+#define HW_CORE_OFE 1
+#define HW_CORE_BPS 2
+
 /* Core level commands */
 /* IPE/BPS core Commands */
 #define HFI_CMD_IPE_BPS_COMMON_START \
@@ -95,6 +115,7 @@
 #define HFI_CMD_DBG_COMMON_START \
 		(HFI_DOMAIN_BASE_DBG + HFI_CMD_START_OFFSET + 0x0)
 #define HFI_CMD_DBG_TEST_START  (HFI_CMD_DBG_COMMON_START + 0x800)
+#define HFI_CMD_DBG_SYNX_TEST   (HFI_CMD_DBG_TEST_START + 0x1)
 #define HFI_CMD_DBG_END         (HFI_CMD_DBG_COMMON_START + 0xFFF)
 
 /* System level messages */
@@ -148,19 +169,27 @@
 
 /* ICP core level Debug test message range */
 #define HFI_MSG_DBG_COMMON_START \
-		(HFI_DOMAIN_BASE_DBG + 0x0)
+		(HFI_DOMAIN_BASE_DBG + HFI_MSG_START_OFFSET + 0x0)
+
 #define HFI_MSG_DBG_TEST_START  (HFI_MSG_DBG_COMMON_START + 0x800)
+#define HFI_MSG_DBG_SYNX_TEST   (HFI_MSG_DBG_TEST_START + 0x1)
 #define HFI_MSG_DBG_END         (HFI_MSG_DBG_COMMON_START + 0xFFF)
 
 /* System  level property base offset */
 #define HFI_PROPERTY_ICP_COMMON_START  (HFI_DOMAIN_BASE_ICP + 0x0)
 
-#define HFI_PROP_SYS_DEBUG_CFG         (HFI_PROPERTY_ICP_COMMON_START + 0x1)
-#define HFI_PROP_SYS_UBWC_CFG          (HFI_PROPERTY_ICP_COMMON_START + 0x2)
-#define HFI_PROP_SYS_IMAGE_VER         (HFI_PROPERTY_ICP_COMMON_START + 0x3)
-#define HFI_PROP_SYS_SUPPORTED         (HFI_PROPERTY_ICP_COMMON_START + 0x4)
-#define HFI_PROP_SYS_IPEBPS_PC         (HFI_PROPERTY_ICP_COMMON_START + 0x5)
-#define HFI_PROP_SYS_FW_DUMP_CFG       (HFI_PROPERTY_ICP_COMMON_START + 0x8)
+#define HFI_PROP_SYS_DEBUG_CFG             (HFI_PROPERTY_ICP_COMMON_START + 0x1)
+#define HFI_PROP_SYS_UBWC_CFG              (HFI_PROPERTY_ICP_COMMON_START + 0x2)
+#define HFI_PROP_SYS_IMAGE_VER             (HFI_PROPERTY_ICP_COMMON_START + 0x3)
+#define HFI_PROP_SYS_SUPPORTED             (HFI_PROPERTY_ICP_COMMON_START + 0x4)
+#define HFI_PROP_SYS_IPEBPS_PC             (HFI_PROPERTY_ICP_COMMON_START + 0x5)
+#define HFI_PROP_SYS_FW_DUMP_CFG           (HFI_PROPERTY_ICP_COMMON_START + 0x8)
+#define HFI_PROPERTY_SYS_UBWC_CONFIG_EX    (HFI_PROPERTY_ICP_COMMON_START + 0x9)
+#define HFI_PROPERTY_SYS_ICP_HW_FREQUENCY  (HFI_PROPERTY_ICP_COMMON_START + 0xa)
+#define HFI_PROPERTY_SYS_RAMDUMP_MODE      (HFI_PROPERTY_ICP_COMMON_START + 0xb)
+#define HFI_PROP_SYS_MEM_REGIONS           (HFI_PROPERTY_ICP_COMMON_START + 0xe)
+#define HFI_PROPERTY_QOS_PARAMS            (HFI_PROPERTY_ICP_COMMON_START + 0x10)
+
 
 /* Capabilities reported at sys init */
 #define HFI_CAPS_PLACEHOLDER_1         (HFI_COMMON_BASE + 0x1)
@@ -193,6 +222,13 @@
 /* Number of available dump levels. */
 #define NUM_HFI_DUMP_LVL        0x00000003
 
+/* Number of available ramdump levels. */
+#define HFI_FW_RAMDUMP_DISABLED 0x00000000
+#define HFI_FW_RAMDUMP_ENABLED  0x00000001
+
+/* Number of available ramdump levels. */
+#define NUM_HFI_RAMDUMP_LVLS    0x00000002
+
 /* Debug Msg Communication types:
  * Section describes different modes (HFI_DEBUG_MODE_X)
  * available to communicate the debug messages
@@ -215,26 +251,17 @@
 
 #define HFI_DEV_VERSION_MAX      0x5
 
-/* General errors and HFI Specific errors. */
-enum hfi_errors {
-	CAMERAICP_SUCCESS,
-	CAMERAICP_EFAILED,
-	CAMERAICP_ENOMEMORY,
-	CAMERAICP_EBADSTATE,
-	CAMERAICP_EBADPARM,
-	CAMERAICP_EBADITEM,
-	CAMERAICP_EINVALIDFORMAT,
-	CAMERAICP_EUNSUPPORTED,
-	CAMERAICP_EOUTOFBOUND,
-	CAMERAICP_ETIMEDOUT,
-	CAMERAICP_EABORTED,
-	CAMERAICP_EHWVIOLATION,
-	CAMERAICP_ECDMERROR,
-	CAMERAICP_HFI_ERR_COMMAND_SIZE = 1000,
-	CAMERAICP_HFI_ERR_MESSAGE_SIZE,
-	CAMERAICP_HFI_QUEUE_EMPTY,
-	CAMERAICP_HFI_QUEUE_FULL,
-};
+/* New mem region definitions */
+#define HFI_MEM_REGION_ID_IPCLITE_SHARED_MEM      0
+#define HFI_MEM_REGION_ID_SYNX_HW_MUTEX           1
+#define HFI_MEM_REGION_ID_GLOBAL_ATOMIC_HW_MUTEX  2
+#define HFI_MEM_REGION_ID_GLOBAL_CNTR             3
+#define HFI_MEM_REGION_ID_SOC_HW_VERSION          5
+
+/* Type of the new regions */
+#define HFI_MEM_REGION_TYPE_CACHED       0
+#define HFI_MEM_REGION_TYPE_UNCACHED     1
+#define HFI_MEM_REGION_TYPE_DEVICE       2
 
 /**
  * start of sys command packet types
@@ -302,7 +329,18 @@ struct hfi_ipe_bps_pc {
 struct hfi_cmd_ubwc_cfg {
 	uint32_t ubwc_fetch_cfg;
 	uint32_t ubwc_write_cfg;
-};
+} __packed;
+
+/**
+ * struct hfi_cmd_ubwc_cfg_ext
+ * Payload structure to configure HFI_UBWC_CFG_TYPE_EXT
+ * @bps: UBWC configuration for bps
+ * @ipe: UBWC configuration for ipe
+ */
+struct hfi_cmd_ubwc_cfg_ext {
+	struct hfi_cmd_ubwc_cfg bps;
+	struct hfi_cmd_ubwc_cfg ipe;
+} __packed;
 
 /**
  * struct hfi_cmd_sys_init
@@ -346,6 +384,31 @@ struct hfi_cmd_prop {
 	uint32_t prop_data[1];
 } __packed;
 
+
+/**
+ * struct session_qos_params
+ * @session_id: Session id equivalent to FW handle id for the session
+ * @target_completion_cycles: Target completion cycles considering concurrent sessions workload
+ */
+struct session_qos_params {
+	uint32_t     session_id;
+	uint32_t     target_completion_cycles;
+} __packed;
+
+/**
+ * struct hfi_cmd_qos_params
+ * command to set QoS
+ * @core_id         : Hardware ID for QOS parameters
+ * @numValidSessions: Number of valid active sessions for QOS parameters array
+ * @qosParams       : QOS parameters array
+ * @HFI_PROPERTY_QOS_PARAMS
+ */
+struct hfi_cmd_qos_params {
+	uint32_t          core_id;
+	uint32_t          num_sessions;
+	struct session_qos_params qos_params[];
+} __packed;
+
 /**
  * struct hfi_cmd_ping_pkt
  * ping command pings the firmware to confirm whether
@@ -372,11 +435,36 @@ struct hfi_cmd_ping_pkt {
  *             as part of HFI_MSG_SYS_RESET_ACK
  * @HFI_CMD_SYS_RESET
  */
-
 struct hfi_cmd_sys_reset_pkt {
 	uint32_t size;
 	uint32_t pkt_type;
 	uint64_t user_data;
+} __packed;
+
+/**
+ * struct hfi_cmd_mem_region_info
+ * Payload structure to configure HFI_PROP_SYS_MEM_REGIONS
+ * @region_id: region id (HW mutex/synx global mem/...)
+ * @region_type: Type of the region (cached/uncached/device/..)
+ * @start_addr: va to the start of this region
+ * @size: size of this region
+ */
+struct hfi_cmd_mem_region_info {
+	uint32_t region_id;
+	uint32_t region_type;
+	uint64_t start_addr;
+	uint32_t size;
+} __packed;
+
+/**
+ * struct hfi_cmd_mem_region_info
+ * Payload structure to configure HFI_PROP_SYS_MEM_REGIONS
+ * @num_valid_regions: Valid number of regions configured to FW
+ * @region_info: Region specific info
+ */
+struct hfi_cmd_config_mem_regions {
+	uint32_t num_valid_regions;
+	struct hfi_cmd_mem_region_info region_info[1];
 } __packed;
 
 /* end of sys command packet types */
@@ -454,7 +542,7 @@ struct hfi_msg_init_done {
 
 /**
  * struct hfi_msg_pc_prep_done
- * system power collapse preperation done message
+ * system power collapse preparation done message
  * @size: packet size in bytes
  * @pkt_type: opcode of a packet
  * @err_type: error code associated with the response
@@ -552,5 +640,4 @@ struct hfi_msg_event_notify {
 /**
  * end of sys message packet types
  */
-
 #endif /* _HFI_DEFS_H_ */
